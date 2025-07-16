@@ -5,7 +5,6 @@ import jwt from "jsonwebtoken";
 const users: { username: string; passwordHash: string }[] = [];
 
 const SECRET = process.env.JWT_SECRET || "mi_pass_secreto";
-console.log("🚀 ~ SECRET:", SECRET)
 
 export const register = async (req: Request, res: Response) => {
   const { username, password } = req.body;
@@ -20,7 +19,6 @@ export const register = async (req: Request, res: Response) => {
 };
 
 export const login = async (req: Request, res: Response) => {
-  console.log("req.body:", req.body);
   const { username, password } = req.body;
 
   const user = users.find((u) => u.username === username);
