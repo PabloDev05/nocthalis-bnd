@@ -5,12 +5,10 @@ import jwt from "jsonwebtoken";
 
 const SECRET = process.env.JWT_SECRET || "mi_pass_secreto";
 
-const users: { username: string; passwordHash: string; email: string }[] = [];
-
 export const register = async (req: Request, res: Response) => {
-  const { username, password, email } = req.body;
+  const { username, password, email, characterClass } = req.body;
 
-  if (!username || !password || !email) {
+  if (!username || !password || !email || !characterClass) {
     return res.status(400).json({ message: "Faltan campos requeridos" });
   }
 
@@ -20,14 +18,27 @@ export const register = async (req: Request, res: Response) => {
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
-  const newUser = new User({ username, email, password: passwordHash });
+
+  const newUser = new User({
+    username,
+    email,
+    password: passwordHash,
+    classChosen: true,
+    characterClass,
+  });
 
   await newUser.save();
 
-  res.status(201).json({ message: "Usuario registrado correctamente" });
+  // 🔐 Generar token
+  const token = jwt.sign({ userId: newUser._id, username: newUser.username }, process.env.JWT_SECRET!, { expiresIn: "1h" });
+
+  // ✅ Respuesta con token incluido
+  res.status(201).json({
+    message: "Usuario registrado correctamente",
+    userId: newUser._id,
+    token,
+  });
 };
-
-
 
 export const login = async (req: Request, res: Response) => {
   const { username, password } = req.body;
@@ -47,10 +58,19 @@ export const login = async (req: Request, res: Response) => {
   }
 
   const token = jwt.sign(
-    { id: user._id, username: user.username },
-    SECRET,
+    {
+      id: user._id,
+      username: user.username,
+      characterClass: user.characterClass,
+    },
+    process.env.JWT_SECRET!,
     { expiresIn: "1h" }
   );
 
-  res.json({ token });
+  res.json({
+    token,
+    userId: user._id,
+    classChosen: user.classChosen,
+    characterClass: user.characterClass,
+  });
 };
