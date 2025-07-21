@@ -37,6 +37,8 @@ export const register = async (req: Request, res: Response) => {
     message: "Usuario registrado correctamente",
     userId: newUser._id,
     token,
+    classChosen: newUser.classChosen,
+    characterClass: newUser.characterClass,
   });
 };
 
