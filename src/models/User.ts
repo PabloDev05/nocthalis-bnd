@@ -6,6 +6,7 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true },
   classChosen: { type: Boolean, default: false },
   characterClass: { type: String, default: null },
+  subClass: { type: String, default: "" },
 });
 
 export const User = mongoose.model("User", userSchema);
