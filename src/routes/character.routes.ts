@@ -4,10 +4,7 @@ import { getCharacterClasses } from "../controllers/getCharacterClasses.controll
 
 const characterRoutes = express.Router();
 
-// POST para elegir clase
 characterRoutes.post("/character/choose-class", chooseClass);
-
-// GET para obtener todas las clases disponibles
 characterRoutes.get("/character/classes", getCharacterClasses);
 
 export default characterRoutes;

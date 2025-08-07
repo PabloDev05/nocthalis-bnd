@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
 import { User } from "../models/User";
+import { CharacterClass } from "../models/CharacterClass";
+import { Character } from "../models/Character";
 
 export const chooseClass = async (req: Request, res: Response) => {
   try {
@@ -14,10 +16,23 @@ export const chooseClass = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Usuario no encontrado." });
     }
 
-    // Evitar que elija clase dos veces (opcional)
     if (user.classChosen) {
       return res.status(400).json({ message: "La clase ya fue elegida." });
     }
+
+    const charClass = await CharacterClass.findById(selectedClass);
+    if (!charClass) {
+      return res.status(404).json({ message: "Clase no encontrada." });
+    }
+
+    const character = new Character({
+      userId: user._id,
+      classId: charClass._id,
+      stats: charClass.baseStats,
+      resistances: charClass.resistances,
+      passivesUnlocked: [charClass.passiveDefault?.name],
+    });
+    await character.save();
 
     user.characterClass = selectedClass;
     user.classChosen = true;
@@ -31,6 +46,7 @@ export const chooseClass = async (req: Request, res: Response) => {
         classChosen: user.classChosen,
         characterClass: user.characterClass,
       },
+      character,
     });
   } catch (err) {
     console.error("Error al elegir clase:", err);

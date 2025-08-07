@@ -4,12 +4,11 @@ import { CharacterClass } from "../models/CharacterClass";
 
 dotenv.config();
 
-//npx ts-node src/scripts/seedCharacterClasses.ts para cargar las clases iniciales
+// Ejecutar: npx ts-node src/scripts/seedCharacterClasses.ts
 
 const seed = async () => {
   try {
     await mongoose.connect(process.env.MONGO_URI!);
-
     await CharacterClass.deleteMany();
 
     const classes = [
@@ -22,6 +21,52 @@ const seed = async () => {
           name: "Espíritu de Guardia",
           description: "Reduce el daño recibido mientras el escudo está activo.",
         },
+        baseStats: {
+          strength: 12,
+          dexterity: 5,
+          intelligence: 2,
+          vitality: 10,
+          physicalDefense: 9,
+          magicalDefense: 3,
+          luck: 2,
+          agility: 4,
+          endurance: 8,
+          wisdom: 2,
+        },
+        resistances: {
+          fire: 4,
+          ice: 4,
+          lightning: 2,
+          poison: 3,
+          sleep: 5,
+          paralysis: 6,
+          confusion: 4,
+          fear: 5,
+          dark: 2,
+          holy: 4,
+          stun: 7,
+          bleed: 5,
+          curse: 4,
+          knockback: 6,
+          criticalChanceReduction: 6,
+          criticalDamageReduction: 5,
+        },
+        combatStats: {
+          maxHP: 150,
+          maxMP: 40,
+          attackPower: 25,
+          magicPower: 5,
+          criticalChance: 5,
+          criticalDamageBonus: 25,
+          attackSpeed: 5,
+          evasion: 5,
+          blockChance: 15,
+          blockValue: 20,
+          lifeSteal: 2,
+          manaSteal: 0,
+          damageReduction: 10,
+          movementSpeed: 4,
+        },
         subclasses: [
           {
             name: "Paladín Caído (Escudo)",
@@ -30,11 +75,11 @@ const seed = async () => {
             passives: [
               {
                 name: "Defensa Absoluta",
-                description: "Incrementa 15% la defensa física cuando está por debajo del 30% de vida.",
+                description: "+15% defensa física bajo 30% de vida.",
               },
               {
                 name: "Resistencia Inquebrantable",
-                description: "Reduce 15% el daño crítico recibido.",
+                description: "-15% daño crítico recibido.",
               },
             ],
           },
@@ -45,11 +90,11 @@ const seed = async () => {
             passives: [
               {
                 name: "Ira Desatada",
-                description: "+15% daño físico con espada de dos manos.",
+                description: "+15% daño físico con espadas de dos manos.",
               },
               {
                 name: "Carga Brutal",
-                description: "Primer golpe tras moverse hace 15% más de daño físico.",
+                description: "Primer golpe tras moverse inflige +15% de daño.",
               },
             ],
           },
@@ -64,6 +109,52 @@ const seed = async () => {
           name: "Llama Interna",
           description: "Aumenta el daño elemental con el tiempo.",
         },
+        baseStats: {
+          strength: 2,
+          dexterity: 4,
+          intelligence: 12,
+          vitality: 6,
+          physicalDefense: 3,
+          magicalDefense: 9,
+          luck: 3,
+          agility: 4,
+          endurance: 5,
+          wisdom: 10,
+        },
+        resistances: {
+          fire: 6,
+          ice: 6,
+          lightning: 5,
+          poison: 2,
+          sleep: 4,
+          paralysis: 3,
+          confusion: 5,
+          fear: 4,
+          dark: 6,
+          holy: 4,
+          stun: 3,
+          bleed: 2,
+          curse: 7,
+          knockback: 3,
+          criticalChanceReduction: 2,
+          criticalDamageReduction: 2,
+        },
+        combatStats: {
+          maxHP: 80,
+          maxMP: 120,
+          attackPower: 5,
+          magicPower: 30,
+          criticalChance: 8,
+          criticalDamageBonus: 30,
+          attackSpeed: 4,
+          evasion: 6,
+          blockChance: 2,
+          blockValue: 5,
+          lifeSteal: 0,
+          manaSteal: 3,
+          damageReduction: 3,
+          movementSpeed: 4,
+        },
         subclasses: [
           {
             name: "Hechicero de Fuego",
@@ -72,11 +163,11 @@ const seed = async () => {
             passives: [
               {
                 name: "Ignición",
-                description: "Provoca explosión al acumular quemaduras.",
+                description: "Explosión al acumular quemaduras.",
               },
               {
                 name: "Chispa Divina",
-                description: "Chance de lanzar una llamarada extra.",
+                description: "Chance de llamarada extra.",
               },
             ],
           },
@@ -91,7 +182,7 @@ const seed = async () => {
               },
               {
                 name: "Reacción Glacial",
-                description: "Activa un escudo de hielo tras recibir un crítico.",
+                description: "Escudo de hielo tras recibir crítico.",
               },
             ],
           },
@@ -104,7 +195,53 @@ const seed = async () => {
         imageMainClassUrl: "/assets/classes/asesino/asesino_class_1.png",
         passiveDefault: {
           name: "Sombra Letal",
-          description: "30% de incremento en daño crítico.",
+          description: "+30% daño crítico.",
+        },
+        baseStats: {
+          strength: 6,
+          dexterity: 10,
+          intelligence: 4,
+          vitality: 6,
+          physicalDefense: 4,
+          magicalDefense: 4,
+          luck: 8,
+          agility: 9,
+          endurance: 5,
+          wisdom: 3,
+        },
+        resistances: {
+          fire: 3,
+          ice: 4,
+          lightning: 4,
+          poison: 6,
+          sleep: 4,
+          paralysis: 4,
+          confusion: 3,
+          fear: 3,
+          dark: 5,
+          holy: 3,
+          stun: 5,
+          bleed: 5,
+          curse: 3,
+          knockback: 4,
+          criticalChanceReduction: 4,
+          criticalDamageReduction: 3,
+        },
+        combatStats: {
+          maxHP: 100,
+          maxMP: 50,
+          attackPower: 20,
+          magicPower: 10,
+          criticalChance: 15,
+          criticalDamageBonus: 40,
+          attackSpeed: 8,
+          evasion: 12,
+          blockChance: 5,
+          blockValue: 5,
+          lifeSteal: 4,
+          manaSteal: 0,
+          damageReduction: 5,
+          movementSpeed: 6,
         },
         subclasses: [
           {
@@ -114,7 +251,7 @@ const seed = async () => {
             passives: [
               {
                 name: "Veneno Letal",
-                description: "Aplica veneno que hace daño con el tiempo.",
+                description: "Aplica veneno con daño con el tiempo.",
               },
               {
                 name: "Toxina Paralizante",
@@ -133,7 +270,7 @@ const seed = async () => {
               },
               {
                 name: "Contraataque Sombrío",
-                description: "Tras evadir, el próximo ataque es crítico garantizado.",
+                description: "Tras evadir, el siguiente ataque es crítico.",
               },
             ],
           },
@@ -148,6 +285,52 @@ const seed = async () => {
           name: "Ojo del Águila",
           description: "Aumenta el daño con el tiempo.",
         },
+        baseStats: {
+          strength: 7,
+          dexterity: 9,
+          intelligence: 4,
+          vitality: 6,
+          physicalDefense: 5,
+          magicalDefense: 4,
+          luck: 6,
+          agility: 8,
+          endurance: 6,
+          wisdom: 4,
+        },
+        resistances: {
+          fire: 4,
+          ice: 3,
+          lightning: 5,
+          poison: 4,
+          sleep: 3,
+          paralysis: 3,
+          confusion: 4,
+          fear: 4,
+          dark: 4,
+          holy: 3,
+          stun: 4,
+          bleed: 4,
+          curse: 3,
+          knockback: 3,
+          criticalChanceReduction: 3,
+          criticalDamageReduction: 3,
+        },
+        combatStats: {
+          maxHP: 110,
+          maxMP: 60,
+          attackPower: 22,
+          magicPower: 5,
+          criticalChance: 12,
+          criticalDamageBonus: 35,
+          attackSpeed: 6,
+          evasion: 8,
+          blockChance: 3,
+          blockValue: 4,
+          lifeSteal: 3,
+          manaSteal: 0,
+          damageReduction: 4,
+          movementSpeed: 6,
+        },
         subclasses: [
           {
             name: "Tirador de Precisión",
@@ -156,11 +339,11 @@ const seed = async () => {
             passives: [
               {
                 name: "Pulso Preciso",
-                description: "Disparo cargado que inflige daño crítico garantizado.",
+                description: "Disparo cargado inflige crítico garantizado.",
               },
               {
                 name: "Reflejo Ágil",
-                description: "Aumenta velocidad de ataque tras esquivar.",
+                description: "+velocidad de ataque tras esquivar.",
               },
             ],
           },
@@ -171,11 +354,11 @@ const seed = async () => {
             passives: [
               {
                 name: "Olor a sangre",
-                description: "Inflige más daño a enemigos con menos del 50% de vida.",
+                description: "+daño a enemigos con <50% vida.",
               },
               {
                 name: "Tiro Venenoso",
-                description: "Flecha que inflige daño de veneno con el tiempo.",
+                description: "Flecha inflige veneno con el tiempo.",
               },
             ],
           },

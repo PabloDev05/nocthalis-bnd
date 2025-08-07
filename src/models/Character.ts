@@ -1,33 +1,15 @@
 import mongoose, { Document } from "mongoose";
-import { CharacterClass as CharacterClassInterface } from "./interfaces/CharacterClass.interface";
+import { Character as CharacterInterface } from "./interfaces/Character.interface";
 
-// Interfaces
-interface CharacterClassDocument extends CharacterClassInterface, Document {}
+interface CharacterDocument extends CharacterInterface, Document {}
 
-// Schemas
-const PassiveSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  description: { type: String, required: true },
-  detail: { type: String },
-});
+const CharacterSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  classId: { type: mongoose.Schema.Types.ObjectId, ref: "CharacterClass", required: true },
+  level: { type: Number, default: 1 },
+  experience: { type: Number, default: 0 },
 
-const SubclassSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  iconName: { type: String, required: true },
-  imageSubclassUrl: { type: String, required: false },
-  passiveDefault: { type: PassiveSchema, required: false },
-  passives: [PassiveSchema],
-});
-
-const CharacterClassSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  description: { type: String },
-  iconName: { type: String, required: true },
-  imageMainClassUrl: { type: String, required: true },
-  passiveDefault: PassiveSchema,
-  subclasses: [SubclassSchema],
-
-  baseStats: {
+  stats: {
     strength: Number,
     dexterity: Number,
     intelligence: Number,
@@ -76,6 +58,24 @@ const CharacterClassSchema = new mongoose.Schema({
     damageReduction: { type: Number, default: 0 },
     movementSpeed: { type: Number, default: 0 },
   },
+
+  passivesUnlocked: [{ type: String }],
+  inventory: [{ type: String }],
+
+  equipment: {
+    head: { type: String, default: null },
+    chest: { type: String, default: null },
+    legs: { type: String, default: null },
+    boots: { type: String, default: null },
+    gloves: { type: String, default: null },
+    weapon: { type: String, default: null },
+    offHand: { type: String, default: null },
+    ring1: { type: String, default: null },
+    ring2: { type: String, default: null },
+    amulet: { type: String, default: null },
+  },
+
+  createdAt: { type: Date, default: Date.now },
 });
 
-export const CharacterClass = mongoose.model<CharacterClassDocument>("CharacterClass", CharacterClassSchema);
+export const Character = mongoose.model<CharacterDocument>("Character", CharacterSchema);
