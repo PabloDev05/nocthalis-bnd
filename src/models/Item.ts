@@ -1,5 +1,5 @@
 import mongoose, { Document } from "mongoose";
-import { Item as ItemInterface } from "./interfaces/Item.interface";
+import { Item as ItemInterface } from "../interfaces/Item/Item.interface";
 
 interface ItemDocument extends ItemInterface, Document {}
 

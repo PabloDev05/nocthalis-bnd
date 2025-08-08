@@ -1,4 +1,4 @@
-import { BaseStats, CombatStats } from "./CharacterClass.interface";
+import { BaseStats, CombatStats } from "../character/CharacterClass.interface";
 
 export type ItemType = "weapon" | "armor" | "accessory" | "potion" | "material";
 

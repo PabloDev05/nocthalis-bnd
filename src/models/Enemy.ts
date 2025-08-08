@@ -1,38 +1,24 @@
 import mongoose, { Document, Schema } from "mongoose";
-import { CharacterClass as CharacterClassInterface } from "../interfaces/character/CharacterClass.interface";
+import { BaseStats, Resistances, CombatStats } from "../interfaces/character/CharacterClass.interface";
 
-export interface CharacterClassDocument extends CharacterClassInterface, Document {}
+export interface EnemyDoc extends Document {
+  name: string;
+  level: number;
+  stats: BaseStats;
+  resistances: Resistances;
+  combatStats: CombatStats;
+  imageUrl?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
-const PassiveSchema = new Schema(
+const EnemySchema = new Schema<EnemyDoc>(
   {
-    name: { type: String, required: true },
-    description: { type: String, required: true },
-    detail: { type: String },
-  },
-  { _id: false }
-);
+    name: { type: String, required: true, index: true },
+    level: { type: Number, required: true, min: 1 },
 
-const SubclassSchema = new Schema(
-  {
-    name: { type: String, required: true },
-    iconName: { type: String, required: true },
-    imageSubclassUrl: { type: String },
-    passiveDefault: { type: PassiveSchema, required: false },
-    passives: { type: [PassiveSchema], default: [] },
-  },
-  { _id: false }
-);
-
-const CharacterClassSchema = new Schema<CharacterClassDocument>(
-  {
-    name: { type: String, required: true, index: true /*, unique: true */ },
-    description: { type: String },
-    iconName: { type: String, required: true },
-    imageMainClassUrl: { type: String, required: true },
-    passiveDefault: { type: PassiveSchema, required: true },
-    subclasses: { type: [SubclassSchema], default: [] },
-
-    baseStats: {
+    // BaseStats con defaults (evita undefined)
+    stats: {
       strength: { type: Number, default: 0 },
       dexterity: { type: Number, default: 0 },
       intelligence: { type: Number, default: 0 },
@@ -45,6 +31,7 @@ const CharacterClassSchema = new Schema<CharacterClassDocument>(
       wisdom: { type: Number, default: 0 },
     },
 
+    // Resistances con defaults
     resistances: {
       fire: { type: Number, default: 0 },
       ice: { type: Number, default: 0 },
@@ -64,6 +51,7 @@ const CharacterClassSchema = new Schema<CharacterClassDocument>(
       criticalDamageReduction: { type: Number, default: 0 },
     },
 
+    // CombatStats con defaults
     combatStats: {
       maxHP: { type: Number, default: 0 },
       maxMP: { type: Number, default: 0 },
@@ -80,6 +68,8 @@ const CharacterClassSchema = new Schema<CharacterClassDocument>(
       damageReduction: { type: Number, default: 0 },
       movementSpeed: { type: Number, default: 0 },
     },
+
+    imageUrl: { type: String },
   },
   {
     timestamps: true,
@@ -96,4 +86,5 @@ const CharacterClassSchema = new Schema<CharacterClassDocument>(
   }
 );
 
-export const CharacterClass = mongoose.models.CharacterClass || mongoose.model<CharacterClassDocument>("CharacterClass", CharacterClassSchema);
+export const Enemy = mongoose.model<EnemyDoc>("Enemy", EnemySchema);
+export type { EnemyDoc as TEnemyDoc };
