@@ -43,6 +43,7 @@ export const seedCharacterClasses = [
     subclasses: [
       {
         name: "Paladín Caído (Escudo)",
+        slug: "paladin-caido-escudo",
         iconName: "Shield",
         imageSubclassUrl: "",
         passives: [
@@ -52,6 +53,7 @@ export const seedCharacterClasses = [
       },
       {
         name: "Verdugo de Hierro (Espada Dos Manos)",
+        slug: "verdugo-hierro-espada-dos-manos",
         iconName: "Sword",
         imageSubclassUrl: "",
         passives: [
@@ -105,6 +107,7 @@ export const seedCharacterClasses = [
     subclasses: [
       {
         name: "Hechicero de Fuego",
+        slug: "hechicero-fuego",
         iconName: "Flame",
         imageSubclassUrl: "",
         passives: [
@@ -114,6 +117,7 @@ export const seedCharacterClasses = [
       },
       {
         name: "Sabio del Hielo",
+        slug: "sabio-hielo",
         iconName: "Snowflake",
         imageSubclassUrl: "",
         passives: [
@@ -167,6 +171,7 @@ export const seedCharacterClasses = [
     subclasses: [
       {
         name: "Acechador Nocturno",
+        slug: "acechador-nocturno",
         iconName: "Ghost",
         imageSubclassUrl: "",
         passives: [
@@ -176,6 +181,7 @@ export const seedCharacterClasses = [
       },
       {
         name: "Danzarín de Sombras",
+        slug: "danzarin-sombras",
         iconName: "Zap",
         imageSubclassUrl: "",
         passives: [
@@ -188,7 +194,7 @@ export const seedCharacterClasses = [
   {
     name: "Arquero",
     description: "Cazador de la penumbra. Su arco canta desde los árboles muertos.",
-    iconName: "GiBowArrow", // ojo: asegurate que tu front sepa renderizar este nombre
+    iconName: "GiBowArrow",
     imageMainClassUrl: "/assets/classes/arquero/arquero_class_1.png",
     passiveDefault: { name: "Ojo del Águila", description: "Aumenta el daño con el tiempo." },
     baseStats: { strength: 7, dexterity: 9, intelligence: 4, vitality: 6, physicalDefense: 5, magicalDefense: 4, luck: 6, agility: 8, endurance: 6, wisdom: 4 },
@@ -229,6 +235,7 @@ export const seedCharacterClasses = [
     subclasses: [
       {
         name: "Tirador de Precisión",
+        slug: "tirador-precision",
         iconName: "Target",
         imageSubclassUrl: "",
         passives: [
@@ -238,6 +245,7 @@ export const seedCharacterClasses = [
       },
       {
         name: "Sanguinario del Linde",
+        slug: "sanguinario-linde",
         iconName: "FaSpider",
         imageSubclassUrl: "",
         passives: [
