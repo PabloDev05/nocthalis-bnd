@@ -1,8 +1,26 @@
-// Genera enemigos por nivel + arquetipo + rareza (tier), con RNG determinístico (mulberry32)
-export type EnemyDoc = {
+// src/scripts/generateEnemies.ts
+// Genera enemigos con stats/loot/XP/Gold escalados y perfiles de drop por SLOT.
+// Produce exactamente 50 enemigos: 3 por nivel (1..15) + minibosses (4,8,12) + bosses (10,15).
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tipos locales (compatibles con src/models/Enemy.ts)
+
+export type EnemyTier = "common" | "elite" | "rare";
+export type BossType = "miniboss" | "boss" | "world";
+type RarityKey = "common" | "uncommon" | "rare" | "epic" | "legendary";
+type SlotKey = "helmet" | "chest" | "gloves" | "boots" | "mainWeapon" | "offWeapon" | "ring" | "belt" | "amulet";
+
+export interface DropProfile {
+  rolls: number;
+  rarityChances: Record<RarityKey, number>;
+  slotWeights: Partial<Record<SlotKey, number>>;
+  guaranteedMinRarity?: "uncommon" | "rare" | "epic";
+}
+
+export interface SeedEnemy {
   name: string;
   level: number;
-  tier: "common" | "elite" | "rare";
+  tier: EnemyTier;
   stats: {
     strength: number;
     dexterity: number;
@@ -50,7 +68,22 @@ export type EnemyDoc = {
     movementSpeed: number;
   };
   imageUrl: string;
-};
+
+  xpReward: number;
+  goldReward: number;
+  dropProfile: DropProfile;
+
+  isBoss?: boolean;
+  bossType?: BossType | null;
+
+  mechanics?: string[];
+  immunities?: string[];
+  lootTierMultiplier?: number;
+  xpMultiplier?: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RNG determinístico
 
 function mulberry32(seed: number) {
   return function () {
@@ -60,56 +93,63 @@ function mulberry32(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(n)));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Arquetipos
 
 type ArchetypeKey = "melee" | "archer" | "mage" | "tank" | "beast" | "rogue";
 
 const ARCHETYPES: Record<
   ArchetypeKey,
   {
-    base: Partial<EnemyDoc["stats"]>;
-    growth: Partial<EnemyDoc["stats"]>;
+    base: Partial<SeedEnemy["stats"]>;
+    growth: Partial<Record<keyof SeedEnemy["stats"], number>>;
     namePool: string[];
     image: string;
   }
 > = {
   melee: {
     base: { strength: 6, vitality: 6, physicalDefense: 4, endurance: 5, dexterity: 4, agility: 4, luck: 2, intelligence: 2, magicalDefense: 2, wisdom: 2 },
-    growth: { strength: 1.4 as any, vitality: 1.3 as any, physicalDefense: 0.8 as any, endurance: 0.9 as any, dexterity: 0.6 as any },
+    growth: { strength: 1.4, vitality: 1.3, physicalDefense: 0.8, endurance: 0.9, dexterity: 0.6 },
     namePool: ["Bandido", "Matón", "Bruto", "Mercenario", "Espadachín"],
     image: "/assets/enemies/melee.png",
   },
   archer: {
     base: { dexterity: 7, agility: 6, luck: 3, strength: 4, vitality: 4, physicalDefense: 3, intelligence: 3, magicalDefense: 2, wisdom: 2 },
-    growth: { dexterity: 1.3 as any, agility: 1.1 as any, luck: 0.5 as any, strength: 0.5 as any },
+    growth: { dexterity: 1.3, agility: 1.1, luck: 0.5, strength: 0.5 },
     namePool: ["Arquero", "Tirador", "Cazador", "Vigía", "Carroñero"],
     image: "/assets/enemies/archer.png",
   },
   mage: {
     base: { intelligence: 8, wisdom: 6, magicalDefense: 5, vitality: 4, dexterity: 3, agility: 3, luck: 3, strength: 2, physicalDefense: 2, endurance: 3 },
-    growth: { intelligence: 1.5 as any, wisdom: 1.2 as any, magicalDefense: 0.9 as any, vitality: 0.5 as any },
+    growth: { intelligence: 1.5, wisdom: 1.2, magicalDefense: 0.9, vitality: 0.5 },
     namePool: ["Acolito", "Cultista", "Hechicero", "Brujo", "Chamán"],
     image: "/assets/enemies/mage.png",
   },
   tank: {
     base: { vitality: 9, physicalDefense: 7, endurance: 7, strength: 5, magicalDefense: 4, agility: 2, dexterity: 3, luck: 2, intelligence: 2, wisdom: 2 },
-    growth: { vitality: 1.8 as any, physicalDefense: 1.2 as any, endurance: 1.2 as any, strength: 1.0 as any, magicalDefense: 0.6 as any },
+    growth: { vitality: 1.8, physicalDefense: 1.2, endurance: 1.2, strength: 1.0, magicalDefense: 0.6 },
     namePool: ["Guardia", "Caballero", "Vigilante", "Rompehuesos", "Gólem"],
     image: "/assets/enemies/tank.png",
   },
   beast: {
     base: { strength: 7, agility: 8, vitality: 6, physicalDefense: 4, endurance: 4, dexterity: 4, luck: 2, intelligence: 1, magicalDefense: 2, wisdom: 1 },
-    growth: { agility: 1.4 as any, strength: 1.2 as any, vitality: 1.1 as any, physicalDefense: 0.6 as any },
+    growth: { agility: 1.4, strength: 1.2, vitality: 1.1, physicalDefense: 0.6 },
     namePool: ["Lobo", "Jabalí", "Saurio", "Hiena", "Raptor"],
     image: "/assets/enemies/beast.png",
   },
   rogue: {
     base: { dexterity: 7, agility: 8, luck: 4, strength: 4, vitality: 4, physicalDefense: 3, intelligence: 2, magicalDefense: 2, endurance: 3, wisdom: 2 },
-    growth: { dexterity: 1.3 as any, agility: 1.3 as any, luck: 0.6 as any, strength: 0.5 as any },
+    growth: { dexterity: 1.3, agility: 1.3, luck: 0.6, strength: 0.5 },
     namePool: ["Ratero", "Asaltante", "Acechador", "Cuchillero", "Sombrío"],
     image: "/assets/enemies/rogue.png",
   },
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resistencias por banda de nivel
 
 function resistTemplate(level: number) {
   const band = level <= 5 ? 0 : level <= 10 ? 1 : 2;
@@ -135,34 +175,10 @@ function resistTemplate(level: number) {
   };
 }
 
-function buildName(rnd: () => number, arche: ArchetypeKey, level: number, tier: EnemyDoc["tier"]) {
-  const pool = ARCHETYPES[arche].namePool;
-  const pick = pool[Math.floor(rnd() * pool.length)];
-  const suffixLevel = level <= 3 ? "Débil" : level <= 6 ? "Curtido" : level <= 10 ? "Templado" : level <= 13 ? "Letal" : "Élite";
-  const prefixTier = tier === "rare" ? "Raro " : tier === "elite" ? "Élite " : "";
-  return `${prefixTier}${pick} ${suffixLevel}`;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Combat derivados del statline + arquetipo
 
-function tierFor(rnd: () => number): EnemyDoc["tier"] {
-  // distribución: 70% common, 25% elite, 5% rare
-  const x = rnd();
-  if (x < 0.05) return "rare";
-  if (x < 0.3) return "elite";
-  return "common";
-}
-
-function applyTierMultipliers(tier: EnemyDoc["tier"], stats: EnemyDoc["stats"], combat: EnemyDoc["combatStats"], resist: EnemyDoc["resistances"]) {
-  const statMul = tier === "rare" ? 1.35 : tier === "elite" ? 1.2 : 1.0;
-  const combatMul = tier === "rare" ? 1.35 : tier === "elite" ? 1.2 : 1.0;
-  const resistBonus = tier === "rare" ? 2 : tier === "elite" ? 1 : 0;
-
-  (Object.keys(stats) as (keyof EnemyDoc["stats"])[]).forEach((k) => (stats[k] = clamp(stats[k] * statMul, 0, 99)));
-  (Object.keys(combat) as (keyof EnemyDoc["combatStats"])[]).forEach((k) => (combat[k] = clamp(combat[k] * combatMul, 0, 9999)));
-  // resistencias pequeñas suben con tier
-  (Object.keys(resist) as (keyof EnemyDoc["resistances"])[]).forEach((k) => (resist[k] = clamp(resist[k] + resistBonus, 0, 99)));
-}
-
-function derivedCombat(level: number, arche: ArchetypeKey, stats: EnemyDoc["stats"]) {
+function derivedCombat(level: number, arche: ArchetypeKey, stats: SeedEnemy["stats"]) {
   const atkBias = { melee: 1.1, archer: 1.0, mage: 0.6, tank: 0.9, beast: 1.05, rogue: 1.0 }[arche];
   const magBias = { melee: 0.4, archer: 0.5, mage: 1.4, tank: 0.3, beast: 0.3, rogue: 0.5 }[arche];
 
@@ -201,7 +217,10 @@ function derivedCombat(level: number, arche: ArchetypeKey, stats: EnemyDoc["stat
   };
 }
 
-function roundStats(obj: Partial<EnemyDoc["stats"]>): EnemyDoc["stats"] {
+// ─────────────────────────────────────────────────────────────────────────────
+// Utilidades varias
+
+function roundStats(obj: Partial<SeedEnemy["stats"]>): SeedEnemy["stats"] {
   const def = {
     strength: 0,
     dexterity: 0,
@@ -219,45 +238,259 @@ function roundStats(obj: Partial<EnemyDoc["stats"]>): EnemyDoc["stats"] {
   return out;
 }
 
-export function generateEnemies(levelFrom: number, levelTo: number, perLevel: number, seed: number = 12345): EnemyDoc[] {
-  const rnd = mulberry32(seed + levelFrom * 9973 + levelTo);
+function pick<T>(rnd: () => number, arr: T[]): T {
+  return arr[Math.floor(rnd() * arr.length)];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slot weights por arquetipo
+
+function slotWeightsForArchetype(arche: ArchetypeKey): Record<SlotKey, number> {
+  const base: Record<SlotKey, number> = {
+    helmet: 1,
+    chest: 1,
+    gloves: 1,
+    boots: 1,
+    mainWeapon: 1,
+    offWeapon: 1,
+    ring: 1,
+    belt: 1,
+    amulet: 1,
+  };
+  if (arche === "melee" || arche === "tank") {
+    base.mainWeapon = 3;
+    base.offWeapon = 3;
+    base.chest = 2;
+    base.gloves = 2;
+  }
+  if (arche === "mage") {
+    base.mainWeapon = 3;
+    base.offWeapon = 3;
+    base.amulet = 2;
+    base.helmet = 2;
+  }
+  if (arche === "archer") {
+    base.mainWeapon = 3;
+    base.offWeapon = 3;
+    base.ring = 2;
+    base.boots = 2;
+  }
+  if (arche === "rogue") {
+    base.mainWeapon = 3;
+    base.ring = 2;
+    base.boots = 2;
+    base.gloves = 2;
+  }
+  if (arche === "beast") {
+    base.belt = 2;
+    base.boots = 2;
+    base.chest = 2;
+  }
+  return base;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rarity chances / rolls / guarantees (por tier + boss)
+
+function normalizeTo100(obj: Record<string, number>) {
+  const total = Object.values(obj).reduce((a, b) => a + b, 0) || 1;
+  const out: any = {};
+  for (const k of Object.keys(obj)) out[k] = Math.round((obj[k] / total) * 100);
+  // Ajuste por redondeo: asegura que sumen 100
+  const sum = Object.values(out).reduce((a: number, b) => a + (b as number), 0);
+  if (sum !== 100) {
+    const keys = Object.keys(out);
+    out[keys[0]] += 100 - sum;
+  }
+  return out as Record<RarityKey, number>;
+}
+
+function computeDropProfile(level: number, arche: ArchetypeKey, tier: EnemyTier, bossType?: BossType | null): DropProfile {
+  const rarityBase =
+    tier === "elite"
+      ? { common: 50, uncommon: 35, rare: 12, epic: 3, legendary: 0 }
+      : tier === "rare"
+      ? { common: 35, uncommon: 40, rare: 18, epic: 6, legendary: 1 }
+      : { common: 70, uncommon: 25, rare: 5, epic: 0, legendary: 0 };
+
+  let rolls = tier === "common" ? 1 : 2;
+  let guaranteedMin: "uncommon" | "rare" | "epic" | undefined;
+
+  if (bossType === "miniboss") {
+    rolls += 1;
+    rarityBase.rare += 5;
+    rarityBase.epic += 3;
+    guaranteedMin = "uncommon";
+  }
+  if (bossType === "boss") {
+    rolls += 2;
+    rarityBase.rare += 10;
+    rarityBase.epic += 8;
+    rarityBase.legendary += 2;
+    guaranteedMin = "rare";
+  }
+  if (bossType === "world") {
+    rolls += 3;
+    rarityBase.uncommon += 5;
+    rarityBase.rare += 12;
+    rarityBase.epic += 10;
+    rarityBase.legendary += 3;
+    guaranteedMin = "epic";
+  }
+
+  const rarityChances = normalizeTo100(rarityBase);
+  const slotWeights = slotWeightsForArchetype(arche);
+
+  return { rolls, rarityChances, slotWeights, guaranteedMinRarity: guaranteedMin };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recompensas XP/Oro
+
+function computeRewards(level: number, tier: EnemyTier, bossType?: BossType | null) {
+  const tierMul = tier === "elite" ? 1.35 : tier === "rare" ? 1.7 : 1.0;
+  const bossMul = bossType === "miniboss" ? 1.2 : bossType === "boss" ? 1.6 : bossType === "world" ? 2.0 : 1.0;
+
+  const baseXP = 12 + level * 8; // curva base
+  const baseGold = 6 + level * 3;
+
+  const xp = Math.round(baseXP * tierMul * bossMul);
+  const gold = Math.round(baseGold * tierMul * bossMul);
+
+  return { xpReward: xp, goldReward: gold };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Construcción de un enemigo
+
+function buildEnemy(rnd: () => number, level: number, tier: EnemyTier, arche: ArchetypeKey, bossType?: BossType | null): SeedEnemy {
+  const spec = ARCHETYPES[arche];
+
+  const base: any = { ...spec.base };
+  // growth * (lvl-1)
+  Object.entries(spec.growth).forEach(([k, g]) => {
+    base[k] = (base[k] || 0) + (g as number) * (level - 1);
+  });
+
+  // Multiplicadores por tier
+  const statMul = tier === "elite" ? 1.15 : tier === "rare" ? 1.35 : 1.0;
+
+  const stats = roundStats(Object.fromEntries(Object.entries(base).map(([k, v]) => [k, (v as number) * statMul])));
+
+  const resistances = resistTemplate(level);
+  // subir un poco resist si es rare
+  if (tier === "elite" || tier === "rare") {
+    (Object.keys(resistances) as (keyof SeedEnemy["resistances"])[]).forEach((k) => {
+      resistances[k] = clamp(resistances[k] + (tier === "rare" ? 2 : 1), 0, 99);
+    });
+  }
+
+  const combatStats = derivedCombat(level, arche, stats);
+
+  // Nombre e imagen
+  const pickName = pick(rnd, spec.namePool);
+  const suffix = level <= 3 ? "Débil" : level <= 6 ? "Curtido" : level <= 10 ? "Templado" : level <= 13 ? "Letal" : "Élite";
+  const tierTag = tier === "rare" ? "Raro " : tier === "elite" ? "Élite " : "";
+  const bossTag = bossType ? (bossType === "miniboss" ? " (Minijefe)" : bossType === "boss" ? " (Jefe)" : " (World Boss)") : "";
+  const name = `${tierTag}${pickName} ${suffix}${bossTag}`;
+  const imageUrl = spec.image;
+
+  const dropProfile = computeDropProfile(level, arche, tier, bossType);
+  const { xpReward, goldReward } = computeRewards(level, tier, bossType);
+
+  return {
+    name,
+    level,
+    tier,
+    stats,
+    resistances,
+    combatStats,
+    imageUrl,
+    xpReward,
+    goldReward,
+    dropProfile,
+    isBoss: !!bossType,
+    bossType: bossType ?? null,
+    mechanics: bossType ? ["enrage", "crushing-blow"] : [],
+    immunities: bossType ? ["fear"] : [],
+    lootTierMultiplier: 1.0,
+    xpMultiplier: 1.0,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API pública
+
+export function generateEnemies(levelFrom: number, levelTo: number, perLevel: number, seed: number): SeedEnemy[] {
+  const rnd = mulberry32(seed + levelFrom * 7919 + levelTo * 104729);
   const types: ArchetypeKey[] = ["melee", "archer", "mage", "tank", "beast", "rogue"];
-  const enemies: EnemyDoc[] = [];
+  const enemies: SeedEnemy[] = [];
 
   for (let lvl = levelFrom; lvl <= levelTo; lvl++) {
     for (let i = 0; i < perLevel; i++) {
-      const arche = types[Math.floor(rnd() * types.length)];
-      const tier = tierFor(rnd); // ← define rareza
-      const spec = ARCHETYPES[arche];
-
-      // stats = base + growth * (lvl - 1)
-      const base = { ...spec.base } as any;
-      Object.entries(spec.growth).forEach(([k, g]) => {
-        base[k] = (base[k] || 0) + (g as number) * (lvl - 1);
-      });
-
-      const stats = roundStats(base);
-      const resistances = resistTemplate(lvl);
-      const combatStats = derivedCombat(lvl, arche, stats);
-
-      // aplicar multiplicadores por rareza
-      applyTierMultipliers(tier, stats, combatStats, resistances);
-
-      const name = buildName(rnd, arche, lvl, tier);
-      const imageUrl = spec.image;
-
-      enemies.push({ name, level: lvl, tier, stats, resistances, combatStats, imageUrl });
+      const arche = pick(rnd, types);
+      // prob tier: 70% common, 25% elite, 5% rare
+      const r = rnd();
+      const tier: EnemyTier = r < 0.05 ? "rare" : r < 0.3 ? "elite" : "common";
+      enemies.push(buildEnemy(rnd, lvl, tier, arche, null));
     }
   }
   return enemies;
 }
 
-export function buildSeedEnemies(): EnemyDoc[] {
-  return [...generateEnemies(1, 5, 2, 20251), ...generateEnemies(6, 10, 2, 20252), ...generateEnemies(11, 15, 2, 20253)];
+/**
+ * Genera EXACTAMENTE 50 enemigos:
+ * - 3 por nivel del 1 al 15 = 45
+ * - Miniboss en niveles 4, 8, 12  → 3
+ * - Boss en niveles 10 y 15       → 2
+ */
+export function buildSeedEnemies(): SeedEnemy[] {
+  const all: SeedEnemy[] = [];
+
+  // 45 regulares
+  all.push(...generateEnemies(1, 15, 3, 20258));
+
+  // minibosses (toman arquetipo aleatorio)
+  const miniLevels = [4, 8, 12];
+  for (const lvl of miniLevels) {
+    const rnd = mulberry32(8800 + lvl);
+    const arche = pick(rnd, ["melee", "archer", "mage", "tank", "beast", "rogue"] as ArchetypeKey[]);
+    // miniboss suele ser "elite" (a veces "rare" en rangos altos)
+    const tier: EnemyTier = lvl >= 10 ? (rnd() < 0.4 ? "rare" : "elite") : "elite";
+    all.push(buildEnemy(rnd, lvl, tier, arche, "miniboss"));
+  }
+
+  // bosses (10, 15)
+  const bossLevels = [10, 15];
+  for (const lvl of bossLevels) {
+    const rnd = mulberry32(9900 + lvl);
+    const arche = pick(rnd, ["tank", "melee", "mage"] as ArchetypeKey[]); // más “épicos”
+    const tier: EnemyTier = lvl >= 15 ? "rare" : "elite";
+    all.push(buildEnemy(rnd, lvl, tier, arche, "boss"));
+  }
+
+  // sanity: debe ser 50
+  if (all.length !== 50) {
+    // Si por algún cambio futuro no diera 50, recortamos o rellenamos con comunes lvl 1
+    if (all.length > 50) return all.slice(0, 50);
+    const rnd = mulberry32(123);
+    while (all.length < 50) {
+      all.push(buildEnemy(rnd, 1, "common", "melee", null));
+    }
+  }
+  return all;
 }
 
+// Ejecución directa para debug
 if (require.main === module) {
-  const all = buildSeedEnemies();
-  console.log(`Generados ${all.length} enemigos`);
-  console.log(all.slice(0, 5));
+  const list = buildSeedEnemies();
+  console.log(`Generados: ${list.length}`);
+  console.log(
+    list.slice(0, 5).map((e) => ({
+      name: e.name,
+      lvl: e.level,
+      tier: e.tier,
+      boss: e.bossType ?? "no",
+    }))
+  );
 }

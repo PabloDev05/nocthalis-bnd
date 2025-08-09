@@ -5,14 +5,15 @@ import { User } from "../models/User";
 import { Character } from "../models/Character";
 import { CharacterClass } from "../models/CharacterClass";
 import { Enemy } from "../models/Enemy";
-import { seedCharacterClasses } from "./seedCharacterClasses";
-import { buildSeedEnemies } from "./generateEnemies";
+import { Item } from "../models/Item";
+import { seedCharacterClasses } from "./seedCharacterClasses"; // array de clases
+import { buildSeedEnemies } from "./generateEnemies"; // función que retorna POJOs
+import { insertSeedItems } from "./seedItems"; // función que inserta y retorna docs
 
 (async () => {
   let exitCode = 0;
 
   try {
-    // Seguridad: impedir ejecución en producción
     if (process.env.NODE_ENV === "production") {
       console.error("❌ No se puede resetear la base en producción.");
       exitCode = 1;
@@ -21,39 +22,53 @@ import { buildSeedEnemies } from "./generateEnemies";
 
     await connectDB();
 
-    // 1) Vaciar colecciones en paralelo (ignora si no existen)
-    await Promise.all([User.deleteMany({}).catch(() => null), Character.deleteMany({}).catch(() => null), CharacterClass.deleteMany({}).catch(() => null), Enemy.deleteMany({}).catch(() => null)]);
-    console.log("🧹 Colecciones vaciadas: users, characters, characterclasses, enemies");
+    // 1) Limpiar colecciones (ignoramos errores si alguna no existe)
+    await Promise.all([
+      User.deleteMany({}).catch(() => null),
+      Character.deleteMany({}).catch(() => null),
+      CharacterClass.deleteMany({}).catch(() => null),
+      Enemy.deleteMany({}).catch(() => null),
+      Item.deleteMany({}).catch(() => null),
+    ]);
+    console.log("🧹 Limpio users, characters, classes, enemies, items");
 
-    // 2) Dropear índices existentes (evita conflicto al recrear)
-    await Promise.allSettled([CharacterClass.collection.dropIndexes(), Enemy.collection.dropIndexes()]);
+    // 2) Sincronizar índices según los Schemas
+    await Promise.allSettled([User.syncIndexes(), Character.syncIndexes(), CharacterClass.syncIndexes(), Enemy.syncIndexes(), Item.syncIndexes()]);
+    console.log("🧩 Índices sincronizados con los Schemas");
 
-    // 3) Crear índices
-    //    - CharacterClass: único por name
-    //    - Enemy: único por (name, level, tier) para permitir mismo nombre/level con distinta rareza
-    await Promise.allSettled([CharacterClass.collection.createIndex({ name: 1 }, { unique: true }), Enemy.collection.createIndex({ name: 1, level: 1, tier: 1 }, { unique: true })]);
+    // 3) Insertar seeds de clases e ítems
+    const [classesInserted, itemsInserted] = await Promise.all([
+      CharacterClass.insertMany(seedCharacterClasses, { ordered: true }),
+      insertSeedItems(), // debe retornar array de docs insertados
+    ]);
 
-    // 4) Insertar seeds
-    //    Clases: con slugs en subclases desde el seed
-    //    Enemigos: generados (rangos 1–5, 6–10, 11–15) con tier common/elite/rare
-    const enemiesSeed = buildSeedEnemies();
+    // 4) Generar e insertar enemigos
+    const enemies = buildSeedEnemies();
+    if (!enemies.length) throw new Error("El generador de enemigos devolvió 0 resultados.");
 
-    const [classesInserted, enemiesInserted] = await Promise.all([CharacterClass.insertMany(seedCharacterClasses, { ordered: true }), Enemy.insertMany(enemiesSeed, { ordered: true })]);
+    const enemiesInserted = await Enemy.insertMany(enemies, { ordered: true });
 
-    console.log(`🌱 Insertadas ${classesInserted.length} clases y ${enemiesInserted.length} enemigos.`);
-    console.log("✅ Base reseteada e insertadas clases y enemigos.");
+    // 5) Log de resultados + IDs útiles para pruebas
+    console.log(`🌱 Clases: ${classesInserted.length} | Items: ${itemsInserted.length} | Enemigos: ${enemiesInserted.length}`);
+    if (classesInserted[0]) {
+      console.log("📌 Ejemplo ClassId:", String(classesInserted[0]._id));
+    }
+    if (itemsInserted[0]) {
+      console.log("📌 Ejemplo ItemId :", String(itemsInserted[0]._id));
+    }
+    if (enemiesInserted[0]) {
+      console.log("📌 Ejemplo EnemyId:", String(enemiesInserted[0]._id));
+    }
 
-    // (Opcional) Log de muestra de enemigos
-    const preview = enemiesSeed.slice(0, 5).map((e) => ({ name: e.name, lvl: e.level, tier: e.tier }));
-    console.log("🔎 Preview enemigos:", preview);
+    console.log("✅ Reset DB OK");
   } catch (err) {
-    console.error("❌ Error reseteando DB:", err);
+    console.error("❌ Error resetDb:", err);
     exitCode = 1;
   } finally {
     try {
       await disconnectDB();
     } catch {
-      // ignore
+      /* ignore */
     }
     process.exit(exitCode);
   }
