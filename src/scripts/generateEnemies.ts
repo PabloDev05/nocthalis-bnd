@@ -1,7 +1,8 @@
-// Genera enemigos escalando por nivel + arquetipo, con RNG determinístico (mulberry32)
+// Genera enemigos por nivel + arquetipo + rareza (tier), con RNG determinístico (mulberry32)
 export type EnemyDoc = {
   name: string;
   level: number;
+  tier: "common" | "elite" | "rare";
   stats: {
     strength: number;
     dexterity: number;
@@ -51,7 +52,6 @@ export type EnemyDoc = {
   imageUrl: string;
 };
 
-// RNG determinístico
 function mulberry32(seed: number) {
   return function () {
     let t = (seed += 0x6d2b79f5);
@@ -67,12 +67,10 @@ type ArchetypeKey = "melee" | "archer" | "mage" | "tank" | "beast" | "rogue";
 const ARCHETYPES: Record<
   ArchetypeKey,
   {
-    // pesos base por stat (antes de crecimiento por nivel)
     base: Partial<EnemyDoc["stats"]>;
-    // crecimiento por nivel (SOLO claves de stats)
     growth: Partial<EnemyDoc["stats"]>;
     namePool: string[];
-    image: string; // ruta base de imagen
+    image: string;
   }
 > = {
   melee: {
@@ -113,9 +111,7 @@ const ARCHETYPES: Record<
   },
 };
 
-// resistencias por banda de nivel
 function resistTemplate(level: number) {
-  // bandas suaves: 1–5, 6–10, 11–15
   const band = level <= 5 ? 0 : level <= 10 ? 1 : 2;
   const base = [0, 2, 4][band];
   const spike = [1, 2, 3][band];
@@ -139,14 +135,33 @@ function resistTemplate(level: number) {
   };
 }
 
-function buildName(rnd: () => number, arche: ArchetypeKey, level: number) {
+function buildName(rnd: () => number, arche: ArchetypeKey, level: number, tier: EnemyDoc["tier"]) {
   const pool = ARCHETYPES[arche].namePool;
   const pick = pool[Math.floor(rnd() * pool.length)];
-  const suffix = level <= 3 ? "Débil" : level <= 6 ? "Curtido" : level <= 10 ? "Templado" : level <= 13 ? "Letal" : "Élite";
-  return `${pick} ${suffix}`;
+  const suffixLevel = level <= 3 ? "Débil" : level <= 6 ? "Curtido" : level <= 10 ? "Templado" : level <= 13 ? "Letal" : "Élite";
+  const prefixTier = tier === "rare" ? "Raro " : tier === "elite" ? "Élite " : "";
+  return `${prefixTier}${pick} ${suffixLevel}`;
 }
 
-// curva de vida/mana y daño según arquetipo y nivel
+function tierFor(rnd: () => number): EnemyDoc["tier"] {
+  // distribución: 70% common, 25% elite, 5% rare
+  const x = rnd();
+  if (x < 0.05) return "rare";
+  if (x < 0.3) return "elite";
+  return "common";
+}
+
+function applyTierMultipliers(tier: EnemyDoc["tier"], stats: EnemyDoc["stats"], combat: EnemyDoc["combatStats"], resist: EnemyDoc["resistances"]) {
+  const statMul = tier === "rare" ? 1.35 : tier === "elite" ? 1.2 : 1.0;
+  const combatMul = tier === "rare" ? 1.35 : tier === "elite" ? 1.2 : 1.0;
+  const resistBonus = tier === "rare" ? 2 : tier === "elite" ? 1 : 0;
+
+  (Object.keys(stats) as (keyof EnemyDoc["stats"])[]).forEach((k) => (stats[k] = clamp(stats[k] * statMul, 0, 99)));
+  (Object.keys(combat) as (keyof EnemyDoc["combatStats"])[]).forEach((k) => (combat[k] = clamp(combat[k] * combatMul, 0, 9999)));
+  // resistencias pequeñas suben con tier
+  (Object.keys(resist) as (keyof EnemyDoc["resistances"])[]).forEach((k) => (resist[k] = clamp(resist[k] + resistBonus, 0, 99)));
+}
+
 function derivedCombat(level: number, arche: ArchetypeKey, stats: EnemyDoc["stats"]) {
   const atkBias = { melee: 1.1, archer: 1.0, mage: 0.6, tank: 0.9, beast: 1.05, rogue: 1.0 }[arche];
   const magBias = { melee: 0.4, archer: 0.5, mage: 1.4, tank: 0.3, beast: 0.3, rogue: 0.5 }[arche];
@@ -212,9 +227,10 @@ export function generateEnemies(levelFrom: number, levelTo: number, perLevel: nu
   for (let lvl = levelFrom; lvl <= levelTo; lvl++) {
     for (let i = 0; i < perLevel; i++) {
       const arche = types[Math.floor(rnd() * types.length)];
+      const tier = tierFor(rnd); // ← define rareza
       const spec = ARCHETYPES[arche];
 
-      // construir stats base + crecimiento
+      // stats = base + growth * (lvl - 1)
       const base = { ...spec.base } as any;
       Object.entries(spec.growth).forEach(([k, g]) => {
         base[k] = (base[k] || 0) + (g as number) * (lvl - 1);
@@ -223,23 +239,25 @@ export function generateEnemies(levelFrom: number, levelTo: number, perLevel: nu
       const stats = roundStats(base);
       const resistances = resistTemplate(lvl);
       const combatStats = derivedCombat(lvl, arche, stats);
-      const name = buildName(rnd, arche, lvl);
+
+      // aplicar multiplicadores por rareza
+      applyTierMultipliers(tier, stats, combatStats, resistances);
+
+      const name = buildName(rnd, arche, lvl, tier);
       const imageUrl = spec.image;
 
-      enemies.push({ name, level: lvl, stats, resistances, combatStats, imageUrl });
+      enemies.push({ name, level: lvl, tier, stats, resistances, combatStats, imageUrl });
     }
   }
   return enemies;
 }
 
-// Helper: genera exactamente lo que pediste (1–5, 6–10, 11–15) y exporta listo para seed
 export function buildSeedEnemies(): EnemyDoc[] {
   return [...generateEnemies(1, 5, 2, 20251), ...generateEnemies(6, 10, 2, 20252), ...generateEnemies(11, 15, 2, 20253)];
 }
 
-// Si ejecutás directamente este archivo: imprime preview
 if (require.main === module) {
   const all = buildSeedEnemies();
   console.log(`Generados ${all.length} enemigos`);
-  console.log(all.slice(0, 5)); // preview
+  console.log(all.slice(0, 5));
 }

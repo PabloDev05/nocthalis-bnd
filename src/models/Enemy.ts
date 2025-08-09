@@ -1,9 +1,13 @@
+// src/models/Enemy.ts
 import mongoose, { Document, Schema } from "mongoose";
 import { BaseStats, Resistances, CombatStats } from "../interfaces/character/CharacterClass.interface";
+
+export type EnemyTier = "common" | "elite" | "rare";
 
 export interface EnemyDoc extends Document {
   name: string;
   level: number;
+  tier: EnemyTier; // ← nuevo
   stats: BaseStats;
   resistances: Resistances;
   combatStats: CombatStats;
@@ -15,7 +19,14 @@ export interface EnemyDoc extends Document {
 const EnemySchema = new Schema<EnemyDoc>(
   {
     name: { type: String, required: true, index: true },
-    level: { type: Number, required: true, min: 1 },
+    level: { type: Number, required: true, min: 1, index: true },
+    tier: {
+      // ← nuevo
+      type: String,
+      enum: ["common", "elite", "rare"],
+      default: "common",
+      index: true,
+    },
 
     // BaseStats con defaults (evita undefined)
     stats: {
@@ -69,7 +80,7 @@ const EnemySchema = new Schema<EnemyDoc>(
       movementSpeed: { type: Number, default: 0 },
     },
 
-    imageUrl: { type: String },
+    imageUrl: { type: String, default: "" },
   },
   {
     timestamps: true,
@@ -86,5 +97,8 @@ const EnemySchema = new Schema<EnemyDoc>(
   }
 );
 
-export const Enemy = mongoose.model<EnemyDoc>("Enemy", EnemySchema);
+// Índice compuesto único para evitar colisiones entre seeds generados
+EnemySchema.index({ name: 1, level: 1, tier: 1 }, { unique: true });
+
+export const Enemy = mongoose.models.Enemy || mongoose.model<EnemyDoc>("Enemy", EnemySchema);
 export type { EnemyDoc as TEnemyDoc };
