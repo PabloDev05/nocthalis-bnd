@@ -1,4 +1,4 @@
-import mongoose, { Document, Schema } from "mongoose";
+import mongoose, { Document, Schema, Types } from "mongoose";
 import { CharacterClass as CharacterClassInterface } from "../interfaces/character/CharacterClass.interface";
 
 export interface CharacterClassDocument extends CharacterClassInterface, Document {}
@@ -9,24 +9,25 @@ const PassiveSchema = new Schema(
     description: { type: String, required: true },
     detail: { type: String },
   },
-  { _id: false }
+  { _id: true }
 );
 
 const SubclassSchema = new Schema(
   {
     name: { type: String, required: true },
     iconName: { type: String, required: true },
-    imageSubclassUrl: { type: String },
+    imageSubclassUrl: { type: String, default: "" },
     passiveDefault: { type: PassiveSchema, required: false },
     passives: { type: [PassiveSchema], default: [] },
+    slug: { type: String, default: null, index: true },
   },
-  { _id: false }
+  { _id: true }
 );
 
 const CharacterClassSchema = new Schema<CharacterClassDocument>(
   {
-    name: { type: String, required: true, index: true /*, unique: true */ },
-    description: { type: String },
+    name: { type: String, required: true, index: true },
+    description: { type: String, default: "" },
     iconName: { type: String, required: true },
     imageMainClassUrl: { type: String, required: true },
     passiveDefault: { type: PassiveSchema, required: true },
