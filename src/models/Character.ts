@@ -1,20 +1,19 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
 import { Character as CharacterInterface } from "../interfaces/character/Character.interface";
 
-/**
- * NOTAS:
- * - Usamos objetos "planos" para stats/resistances/combatStats (no Map) para que el front y servicios
- *   puedan leerlos sin conversión.
- * - Slots de equipo normalizados: helmet, chest, gloves, boots, mainWeapon, offWeapon, ring, belt, amulet.
- * - inventory guarda IDs de Item como strings (ObjectId string).
- */
+/** Claves reales del schema de equipo */
+export type EquipmentSlot = "helmet" | "chest" | "gloves" | "boots" | "mainWeapon" | "offWeapon" | "ring" | "belt" | "amulet";
 
-export interface CharacterDocument extends Omit<CharacterInterface, "userId" | "classId">, Document {
+/** Objeto de equipo fuertemente tipado */
+export type Equipment = Record<EquipmentSlot, string | null>;
+
+export interface CharacterDocument extends Omit<CharacterInterface, "userId" | "classId" | "equipment">, Document<Types.ObjectId> {
   userId: Types.ObjectId;
   classId: Types.ObjectId;
   subclassId?: Types.ObjectId | null;
-  // inventory guarda ids de Item
   inventory: string[];
+  equipment: Equipment; // <- forzamos el tipo correcto
+  id: string;
 }
 
 const StatsSchema = new Schema(
@@ -97,7 +96,7 @@ const CharacterSchema = new Schema<CharacterDocument>(
       ref: "User",
       required: true,
       index: true,
-      unique: true, // 1 personaje por usuario
+      unique: true,
     },
     classId: {
       type: Schema.Types.ObjectId,
@@ -126,15 +125,22 @@ const CharacterSchema = new Schema<CharacterDocument>(
     toJSON: {
       virtuals: true,
       transform: (_doc, ret) => {
-        ret.id = ret._id;
-        delete ret._id;
+        ret.id = ret._id?.toString();
+        Reflect.deleteProperty(ret as any, "_id");
+        return ret;
+      },
+    },
+    toObject: {
+      virtuals: true,
+      transform: (_doc, ret) => {
+        ret.id = ret._id?.toString();
+        Reflect.deleteProperty(ret as any, "_id");
         return ret;
       },
     },
   }
 );
 
-// Defaults defensivos por si algo llega vacío
 CharacterSchema.pre("save", function (next) {
   if (!this.combatStats) this.combatStats = {} as any;
   if (!this.stats) this.stats = {} as any;
@@ -144,6 +150,10 @@ CharacterSchema.pre("save", function (next) {
   next();
 });
 
-export const Character = mongoose.models.Character || mongoose.model<CharacterDocument>("Character", CharacterSchema);
+CharacterSchema.virtual("id").get(function (this: { _id: Types.ObjectId }) {
+  return this._id.toString();
+});
+
+export const Character = (mongoose.models.Character as mongoose.Model<CharacterDocument>) || mongoose.model<CharacterDocument>("Character", CharacterSchema);
 
 export type { CharacterDocument as TCharacterDoc };

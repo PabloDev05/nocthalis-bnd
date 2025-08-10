@@ -1,13 +1,17 @@
-import mongoose, { Document, Schema } from "mongoose";
+// src/models/CharacterClass.ts
+import mongoose, { Document, Schema, Types } from "mongoose";
 import { CharacterClass as CharacterClassInterface } from "../interfaces/character/CharacterClass.interface";
 
 /**
  * NOTAS:
  * - Subclases con _id propio (ObjectId) + slug opcional indexado.
- * - toJSON mapea _id → id.
+ * - toJSON mapea _id → id (string) y oculta _id.
  */
 
-export interface CharacterClassDocument extends CharacterClassInterface, Document {}
+export interface CharacterClassDocument extends CharacterClassInterface, Document<Types.ObjectId> {
+  _id: Types.ObjectId;
+  id: string;
+}
 
 const PassiveSchema = new Schema(
   {
@@ -90,7 +94,7 @@ const CombatStatsSchema = new Schema(
 
 const CharacterClassSchema = new Schema<CharacterClassDocument>(
   {
-    name: { type: String, required: true, index: true /* unique por seed si querés */ },
+    name: { type: String, required: true, index: true /* unique si seed fija */ },
     description: { type: String, default: "" },
     iconName: { type: String, required: true },
     imageMainClassUrl: { type: String, required: true },
@@ -109,12 +113,25 @@ const CharacterClassSchema = new Schema<CharacterClassDocument>(
     toJSON: {
       virtuals: true,
       transform: (_doc, ret) => {
-        ret.id = ret._id;
-        delete ret._id;
+        ret.id = ret._id?.toString();
+        Reflect.deleteProperty(ret as any, "_id");
+        return ret;
+      },
+    },
+    toObject: {
+      virtuals: true,
+      transform: (_doc, ret) => {
+        ret.id = ret._id?.toString();
+        Reflect.deleteProperty(ret as any, "_id");
         return ret;
       },
     },
   }
 );
 
-export const CharacterClass = mongoose.models.CharacterClass || mongoose.model<CharacterClassDocument>("CharacterClass", CharacterClassSchema);
+// virtual id por si accedés a docs hidratados
+CharacterClassSchema.virtual("id").get(function (this: { _id: Types.ObjectId }) {
+  return this._id.toString();
+});
+
+export const CharacterClass = (mongoose.models.CharacterClass as mongoose.Model<CharacterClassDocument>) || mongoose.model<CharacterClassDocument>("CharacterClass", CharacterClassSchema);

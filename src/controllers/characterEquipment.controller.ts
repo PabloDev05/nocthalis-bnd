@@ -1,53 +1,38 @@
-// src/controllers/characterEquipment.controller.ts
 import { Request, Response } from "express";
 import { Types } from "mongoose";
-import { Character } from "../models/Character";
-import { Item } from "../models/Item";
+import { Character, type Equipment, type EquipmentSlot } from "../models/Character";
+import { Item, type ItemLean } from "../models/Item";
 
 interface AuthReq extends Request {
   user?: { id: string };
 }
 
-const SLOT_MAP: Record<string, keyof InstanceType<typeof Character>["equipment"]> = {
-  // modernos -> actuales del schema
-  helmet: "head",
-  chest: "chest",
-  gloves: "gloves",
-  boots: "boots",
-  mainWeapon: "weapon",
-  offWeapon: "offHand",
-  ring: "ring1", // por ahora 1 solo anillo
-  belt: "legs", // TEMP: usamos legs como “belt” hasta migrar el schema
-  amulet: "amulet",
+// Claves de slot válidas (desde el tipo del modelo)
+const ALLOWED_SLOTS: readonly EquipmentSlot[] = ["helmet", "chest", "gloves", "boots", "mainWeapon", "offWeapon", "ring", "belt", "amulet"] as const;
 
-  // por si el front ya manda los legacy
-  head: "head",
-  weapon: "weapon",
-  offHand: "offHand",
-  ring1: "ring1",
-  ring2: "ring2",
-  legs: "legs",
-};
+type AllowedSlot = (typeof ALLOWED_SLOTS)[number];
 
-const ALLOWED_SLOTS = Object.keys(SLOT_MAP);
-
-/** helper: asegura estructura de equipment */
-function ensureEquipment(char: any) {
-  char.equipment = char.equipment || {};
-  const defaults = {
-    head: null,
+/** Asegura estructura completa de equipment */
+function ensureEquipment(char: { equipment?: Partial<Equipment> }) {
+  const defaults: Equipment = {
+    helmet: null,
     chest: null,
-    legs: null, // TEMP usado para "belt"
-    boots: null,
     gloves: null,
-    weapon: null,
-    offHand: null,
-    ring1: null,
-    ring2: null,
+    boots: null,
+    mainWeapon: null,
+    offWeapon: null,
+    ring: null,
+    belt: null,
     amulet: null,
   };
-  for (const k of Object.keys(defaults)) {
-    if (typeof char.equipment[k] === "undefined") char.equipment[k] = (defaults as any)[k];
+  if (!char.equipment) {
+    char.equipment = { ...defaults };
+    return;
+  }
+  for (const k of ALLOWED_SLOTS) {
+    if (typeof char.equipment[k] === "undefined") {
+      char.equipment[k] = defaults[k];
+    }
   }
 }
 
@@ -62,13 +47,16 @@ export async function getInventory(req: AuthReq, res: Response) {
 
     ensureEquipment(character);
 
-    // Items por id (si están guardados como strings, igual sirven para _id)
+    // Cargar ítems del inventario
     const invIds = (character.inventory || []).filter(Boolean);
-    const items = invIds.length ? await Item.find({ _id: { $in: invIds } }).lean() : [];
+    let items: ItemLean[] = [];
+    if (invIds.length > 0) {
+      items = await Item.find({ _id: { $in: invIds } }).lean<ItemLean[]>({ virtuals: true });
+    }
 
     return res.json({
-      equipment: character.equipment,
-      inventory: items,
+      equipment: character.equipment, // ids string o null
+      inventory: items, // objetos con 'id' (sin _id)
     });
   } catch (err) {
     console.error("getInventory error:", err);
@@ -82,26 +70,30 @@ export async function equipItem(req: AuthReq, res: Response) {
     const userId = req.user?.id;
     const { itemId } = req.body as { itemId?: string };
     if (!userId) return res.status(401).json({ message: "No autenticado" });
-    if (!itemId || !Types.ObjectId.isValid(itemId)) return res.status(400).json({ message: "itemId inválido" });
+    if (!itemId || !Types.ObjectId.isValid(itemId)) {
+      return res.status(400).json({ message: "itemId inválido" });
+    }
 
-    const [character, item] = await Promise.all([Character.findOne({ userId }), Item.findById(itemId).lean()]);
+    const [character, item] = await Promise.all([Character.findOne({ userId }), Item.findById(itemId).lean<ItemLean>({ virtuals: true })]);
     if (!character) return res.status(404).json({ message: "Personaje no encontrado" });
     if (!item) return res.status(404).json({ message: "Ítem no encontrado" });
 
-    // Determinar slot de ese item (con tu schema actual)
-    // Nota: tu Item tiene `slot`: "head"|"chest"|"legs"|...|"weapon"|"offHand"|...
-    const incomingSlot = item.slot;
-    const mapped = SLOT_MAP[incomingSlot];
-    if (!mapped) return res.status(400).json({ message: `Slot no soportado: ${incomingSlot}` });
+    // Validar slot del ítem
+    const incomingSlot = item.slot as EquipmentSlot;
+    if (!ALLOWED_SLOTS.includes(incomingSlot)) {
+      return res.status(400).json({ message: `Slot no soportado: ${incomingSlot}` });
+    }
+    const slot: AllowedSlot = incomingSlot;
 
-    if ((item.levelRequirement ?? 1) > character.level) {
+    // Requisito de nivel
+    if ((item.levelRequirement ?? 1) > (character.level || 1)) {
       return res.status(400).json({ message: "Nivel insuficiente para equipar este ítem" });
     }
 
     ensureEquipment(character);
 
-    // mover equip anterior al inventario
-    const prev = (character.equipment as any)[mapped];
+    // Si había algo equipado, moverlo al inventario
+    const prev = character.equipment[slot];
     if (prev) {
       character.inventory = character.inventory || [];
       if (!character.inventory.find((x: string) => String(x) === String(prev))) {
@@ -109,17 +101,17 @@ export async function equipItem(req: AuthReq, res: Response) {
       }
     }
 
-    // equipar el nuevo
-    (character.equipment as any)[mapped] = item._id;
+    // Equipar el nuevo (guardamos el id como string)
+    character.equipment[slot] = item.id;
 
-    // quitar de inventario si estaba
-    character.inventory = (character.inventory || []).filter((x: string) => String(x) !== String(item._id));
+    // Remover del inventario si estaba
+    character.inventory = (character.inventory || []).filter((x: string) => String(x) !== String(item.id));
 
     await character.save();
 
     return res.json({
       message: "Ítem equipado",
-      slot: mapped,
+      slot,
       equipment: character.equipment,
       inventory: character.inventory,
     });
@@ -133,37 +125,37 @@ export async function equipItem(req: AuthReq, res: Response) {
 export async function unequipItem(req: AuthReq, res: Response) {
   try {
     const userId = req.user?.id;
-    let { slot } = req.body as { slot?: string };
+    const { slot } = req.body as { slot?: string };
     if (!userId) return res.status(401).json({ message: "No autenticado" });
     if (!slot) return res.status(400).json({ message: "Falta slot" });
 
-    if (!ALLOWED_SLOTS.includes(slot)) {
+    if (!ALLOWED_SLOTS.includes(slot as EquipmentSlot)) {
       return res.status(400).json({ message: `Slot no soportado: ${slot}` });
     }
-    const mapped = SLOT_MAP[slot];
+    const typedSlot = slot as EquipmentSlot;
 
     const character = await Character.findOne({ userId });
     if (!character) return res.status(404).json({ message: "Personaje no encontrado" });
 
     ensureEquipment(character);
 
-    const equipped = (character.equipment as any)[mapped];
+    const equipped = character.equipment[typedSlot];
     if (!equipped) {
       return res.status(400).json({ message: "No hay ítem equipado en ese slot" });
     }
 
-    // pasar al inventario
+    // Mover al inventario
     character.inventory = character.inventory || [];
     if (!character.inventory.find((x: string) => String(x) === String(equipped))) {
       character.inventory.push(String(equipped));
     }
 
-    (character.equipment as any)[mapped] = null;
+    character.equipment[typedSlot] = null;
     await character.save();
 
     return res.json({
       message: "Ítem desequipado",
-      slot: mapped,
+      slot: typedSlot,
       equipment: character.equipment,
       inventory: character.inventory,
     });
@@ -173,20 +165,22 @@ export async function unequipItem(req: AuthReq, res: Response) {
   }
 }
 
-/** POST /character/use-item  { itemId }  — solo consumibles básicos por ahora */
+/** POST /character/use-item  { itemId } — consumibles */
 export async function useConsumable(req: AuthReq, res: Response) {
   try {
     const userId = req.user?.id;
     const { itemId } = req.body as { itemId?: string };
     if (!userId) return res.status(401).json({ message: "No autenticado" });
-    if (!itemId || !Types.ObjectId.isValid(itemId)) return res.status(400).json({ message: "itemId inválido" });
+    if (!itemId || !Types.ObjectId.isValid(itemId)) {
+      return res.status(400).json({ message: "itemId inválido" });
+    }
 
-    const [character, item] = await Promise.all([Character.findOne({ userId }), Item.findById(itemId).lean()]);
+    const [character, item] = await Promise.all([Character.findOne({ userId }), Item.findById(itemId).lean<ItemLean>({ virtuals: true })]);
     if (!character) return res.status(404).json({ message: "Personaje no encontrado" });
     if (!item) return res.status(404).json({ message: "Ítem no encontrado" });
 
-    // validar que esté en inventario
-    const inInv = (character.inventory || []).some((x: string) => String(x) === String(item._id));
+    // Validar que esté en inventario (por id string)
+    const inInv = (character.inventory || []).some((x: string) => String(x) === String(item.id));
     if (!inInv) return res.status(400).json({ message: "El ítem no está en tu inventario" });
 
     // Debe ser consumible
@@ -194,13 +188,11 @@ export async function useConsumable(req: AuthReq, res: Response) {
       return res.status(400).json({ message: "El ítem no es consumible" });
     }
 
-    // ⚠️ Efecto placeholder (aplicar según tu diseño)
-    // p.ej., si es "potion" y tiene combatStats.maxHP => curar fuera de combate, etc.
-    // Por ahora solo lo removemos del inventario.
-    character.inventory = (character.inventory || []).filter((x: string) => String(x) !== String(item._id));
+    // TODO: aplicar efecto según tipo/efectos
+    character.inventory = (character.inventory || []).filter((x: string) => String(x) !== String(item.id));
     await character.save();
 
-    return res.json({ message: "Consumible usado", itemId: item._id });
+    return res.json({ message: "Consumible usado", itemId: item.id });
   } catch (err) {
     console.error("useConsumable error:", err);
     return res.status(500).json({ message: "Error interno" });
@@ -218,22 +210,17 @@ export async function getProgression(req: AuthReq, res: Response) {
 
     const level = character.level || 1;
     const experience = character.experience || 0;
-    const xpToNext = Math.max(0, xpNeededFor(level + 1) - experience);
+    const nextLevelAt = xpNeededFor(level + 1);
+    const xpToNext = Math.max(0, nextLevelAt - experience);
 
-    return res.json({
-      level,
-      experience,
-      nextLevelAt: xpNeededFor(level + 1),
-      xpToNext,
-    });
+    return res.json({ level, experience, nextLevelAt, xpToNext });
   } catch (err) {
     console.error("getProgression error:", err);
     return res.status(500).json({ message: "Error interno" });
   }
 }
 
-// Curva simple (ajústala cuando quieras)
+// Curva simple
 function xpNeededFor(level: number) {
-  // base 100 + growth cuadrática
   return Math.floor(100 + level * level * 20);
 }

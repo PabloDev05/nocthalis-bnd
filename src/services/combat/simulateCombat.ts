@@ -1,7 +1,5 @@
-// src/services/combat/simulateCombat.ts
 // Adaptador: usa tu motor POO (PlayerCharacter, EnemyBot, CombatManager)
 // Soporta "fixtures" (pruebas) y "real/real-preview" (datos desde DB o builders).
-
 import { PlayerCharacter } from "../../classes/combat/PlayerCharacter";
 import { EnemyBot } from "../../classes/combat/EnemyBot";
 import { CombatManager } from "../../classes/combat/CombatManager";

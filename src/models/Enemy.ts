@@ -246,5 +246,5 @@ EnemySchema.virtual("powerScore").get(function (this: EnemyDoc) {
   return (s.strength + s.dexterity + s.intelligence + s.vitality + s.physicalDefense + s.magicalDefense) * 1 + (c.attackPower + c.magicPower) * 1.5 + c.maxHP * 0.2;
 });
 
-export const Enemy = mongoose.models.Enemy || mongoose.model<EnemyDoc>("Enemy", EnemySchema);
+export const Enemy = (mongoose.models.Enemy as mongoose.Model<EnemyDoc>) || mongoose.model<EnemyDoc>("Enemy", EnemySchema);
 export type { EnemyDoc as TEnemyDoc };
