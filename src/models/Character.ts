@@ -1,40 +1,22 @@
-// src/models/CharacterClass.ts
 import mongoose, { Document, Schema, Types } from "mongoose";
-import { CharacterClass as CharacterClassInterface } from "../interfaces/character/CharacterClass.interface";
+import { Character as CharacterInterface } from "../interfaces/character/Character.interface";
 
-/**
- * NOTAS:
- * - Subclases con _id propio (ObjectId) + slug opcional indexado.
- * - toJSON mapea _id → id (string) y oculta _id.
- */
+/** Claves reales del schema de equipo */
+export type EquipmentSlot = "helmet" | "chest" | "gloves" | "boots" | "mainWeapon" | "offWeapon" | "ring" | "belt" | "amulet";
 
-export interface CharacterClassDocument extends CharacterClassInterface, Document<Types.ObjectId> {
-  _id: Types.ObjectId;
+/** Objeto de equipo fuertemente tipado */
+export type Equipment = Record<EquipmentSlot, string | null>;
+
+export interface CharacterDocument extends Omit<CharacterInterface, "userId" | "classId" | "equipment">, Document<Types.ObjectId> {
+  userId: Types.ObjectId;
+  classId: Types.ObjectId;
+  subclassId?: Types.ObjectId | null;
+  inventory: string[];
+  equipment: Equipment; // <- forzamos el tipo correcto
   id: string;
 }
 
-const PassiveSchema = new Schema(
-  {
-    name: { type: String, required: true },
-    description: { type: String, required: true },
-    detail: { type: String },
-  },
-  { _id: true }
-);
-
-const SubclassSchema = new Schema(
-  {
-    name: { type: String, required: true },
-    iconName: { type: String, required: true },
-    imageSubclassUrl: { type: String, default: "" },
-    passiveDefault: { type: PassiveSchema, required: false },
-    passives: { type: [PassiveSchema], default: [] },
-    slug: { type: String, default: null, index: true },
-  },
-  { _id: true }
-);
-
-const BaseStatsSchema = new Schema(
+const StatsSchema = new Schema(
   {
     strength: { type: Number, default: 0 },
     dexterity: { type: Number, default: 0 },
@@ -92,19 +74,49 @@ const CombatStatsSchema = new Schema(
   { _id: false }
 );
 
-const CharacterClassSchema = new Schema<CharacterClassDocument>(
+const EquipmentSchema = new Schema(
   {
-    name: { type: String, required: true, index: true /* unique si seed fija */ },
-    description: { type: String, default: "" },
-    iconName: { type: String, required: true },
-    imageMainClassUrl: { type: String, required: true },
+    helmet: { type: String, default: null },
+    chest: { type: String, default: null },
+    gloves: { type: String, default: null },
+    boots: { type: String, default: null },
+    mainWeapon: { type: String, default: null },
+    offWeapon: { type: String, default: null },
+    ring: { type: String, default: null },
+    belt: { type: String, default: null },
+    amulet: { type: String, default: null },
+  },
+  { _id: false }
+);
 
-    passiveDefault: { type: PassiveSchema, required: true },
-    subclasses: { type: [SubclassSchema], default: [] },
+const CharacterSchema = new Schema<CharacterDocument>(
+  {
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+      unique: true,
+    },
+    classId: {
+      type: Schema.Types.ObjectId,
+      ref: "CharacterClass",
+      required: true,
+      index: true,
+    },
+    subclassId: { type: Schema.Types.ObjectId, default: null, index: true },
 
-    baseStats: { type: BaseStatsSchema, default: () => ({}) },
+    level: { type: Number, default: 1, min: 1 },
+    experience: { type: Number, default: 0, min: 0 },
+
+    stats: { type: StatsSchema, default: () => ({}) },
     resistances: { type: ResistancesSchema, default: () => ({}) },
     combatStats: { type: CombatStatsSchema, default: () => ({}) },
+
+    passivesUnlocked: { type: [String], default: [] },
+    inventory: { type: [String], default: [] },
+
+    equipment: { type: EquipmentSchema, default: () => ({}) },
   },
   {
     timestamps: true,
@@ -129,9 +141,19 @@ const CharacterClassSchema = new Schema<CharacterClassDocument>(
   }
 );
 
-// virtual id por si accedés a docs hidratados
-CharacterClassSchema.virtual("id").get(function (this: { _id: Types.ObjectId }) {
+CharacterSchema.pre("save", function (next) {
+  if (!this.combatStats) this.combatStats = {} as any;
+  if (!this.stats) this.stats = {} as any;
+  if (!this.resistances) this.resistances = {} as any;
+  if (!this.equipment) this.equipment = {} as any;
+  if (!this.inventory) this.inventory = [];
+  next();
+});
+
+CharacterSchema.virtual("id").get(function (this: { _id: Types.ObjectId }) {
   return this._id.toString();
 });
 
-export const CharacterClass = (mongoose.models.CharacterClass as mongoose.Model<CharacterClassDocument>) || mongoose.model<CharacterClassDocument>("CharacterClass", CharacterClassSchema);
+export const Character = (mongoose.models.Character as mongoose.Model<CharacterDocument>) || mongoose.model<CharacterDocument>("Character", CharacterSchema);
+
+export type { CharacterDocument as TCharacterDoc };
