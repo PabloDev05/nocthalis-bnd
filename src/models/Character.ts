@@ -1,18 +1,75 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
-import { Character as CharacterInterface } from "../interfaces/character/Character.interface";
 
-/** Claves reales del schema de equipo */
+/** Slots válidos en el modelo */
 export type EquipmentSlot = "helmet" | "chest" | "gloves" | "boots" | "mainWeapon" | "offWeapon" | "ring" | "belt" | "amulet";
 
 /** Objeto de equipo fuertemente tipado */
 export type Equipment = Record<EquipmentSlot, string | null>;
 
-export interface CharacterDocument extends Omit<CharacterInterface, "userId" | "classId" | "equipment">, Document<Types.ObjectId> {
+/** Documento de Character en Mongo (tipado explícito) */
+export interface CharacterDocument extends Document<Types.ObjectId> {
   userId: Types.ObjectId;
   classId: Types.ObjectId;
   subclassId?: Types.ObjectId | null;
+
+  level: number;
+  experience: number;
+
+  stats: {
+    strength: number;
+    dexterity: number;
+    intelligence: number;
+    vitality: number;
+    physicalDefense: number;
+    magicalDefense: number;
+    luck: number;
+    agility: number;
+    endurance: number;
+    wisdom: number;
+  };
+
+  resistances: {
+    fire: number;
+    ice: number;
+    lightning: number;
+    poison: number;
+    sleep: number;
+    paralysis: number;
+    confusion: number;
+    fear: number;
+    dark: number;
+    holy: number;
+    stun: number;
+    bleed: number;
+    curse: number;
+    knockback: number;
+    criticalChanceReduction: number;
+    criticalDamageReduction: number;
+  };
+
+  combatStats: {
+    maxHP: number;
+    maxMP: number;
+    attackPower: number;
+    magicPower: number;
+    criticalChance: number;
+    criticalDamageBonus: number;
+    attackSpeed: number;
+    evasion: number;
+    blockChance: number;
+    blockValue: number;
+    lifeSteal: number;
+    manaSteal: number;
+    damageReduction: number;
+    movementSpeed: number;
+  };
+
+  passivesUnlocked: string[];
   inventory: string[];
-  equipment: Equipment; // <- forzamos el tipo correcto
+  equipment: Equipment;
+
+  createdAt: Date;
+  updatedAt: Date;
   id: string;
 }
 
@@ -91,19 +148,8 @@ const EquipmentSchema = new Schema(
 
 const CharacterSchema = new Schema<CharacterDocument>(
   {
-    userId: {
-      type: Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-      index: true,
-      unique: true,
-    },
-    classId: {
-      type: Schema.Types.ObjectId,
-      ref: "CharacterClass",
-      required: true,
-      index: true,
-    },
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true, unique: true },
+    classId: { type: Schema.Types.ObjectId, ref: "CharacterClass", required: true, index: true },
     subclassId: { type: Schema.Types.ObjectId, default: null, index: true },
 
     level: { type: Number, default: 1, min: 1 },

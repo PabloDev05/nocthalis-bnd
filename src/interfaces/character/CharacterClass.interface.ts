@@ -1,30 +1,47 @@
 export interface Passive {
+  /** _id opcional para cuando viene de Mongoose */
+  _id?: string;
+  id?: string;
   name: string;
   description: string;
   detail?: string;
-  modifiers?: Partial<BaseStats & CombatStats>; // bonus pasivo
+  /** bonus que podría aplicar la clase/subclase */
+  modifiers?: Partial<BaseStats & CombatStats>;
+}
+
+export interface Subclass {
+  /** _id opcional para subdocs de Mongoose */
+  _id?: string;
+  id?: string;
+  name: string;
+  iconName: string;
+  imageSubclassUrl?: string;
+  passiveDefault?: Passive;
+  passives: Passive[];
+  /** slug opcional para lookup */
+  slug?: string | null;
 }
 
 export interface CharacterClass {
+  /** ids opcionales para DTOs/docs */
+  _id?: string;
+  id?: string;
+
   name: string;
   description?: string;
   iconName: string;
   imageMainClassUrl: string;
+
   passiveDefault: Passive;
   subclasses: Subclass[];
+
+  /** Template de la clase */
   baseStats: BaseStats;
   resistances: Resistances;
   combatStats?: CombatStats;
 }
 
-export interface Subclass {
-  name: string;
-  iconName: string;
-  passiveDefault?: Passive;
-  imageSubclassUrl?: string;
-  passives: Passive[];
-}
-
+/** Bloques de stats base */
 export interface BaseStats {
   strength: number;
   dexterity: number;
