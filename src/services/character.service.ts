@@ -1,4 +1,7 @@
-// src/services/character.service.ts
+// findCharacterById: trae classId con pasivas/subclases para aplicar antes del combate
+// grantRewardsAndLoot: aplica XP/level-ups y agrega drops al inventario, con logs.
+const DBG = process.env.DEBUG_COMBAT === "1";
+
 import { Types } from "mongoose";
 import { Character } from "../models/Character";
 import { rollLootForEnemy, type PlayerClassName } from "../utils/loot";
@@ -18,45 +21,47 @@ function getPopulatedClassName(player: CharacterLean | null | undefined, fallbac
 
 /**
  * Busca por _id si es ObjectId válido; si no, por userId (1 personaje por usuario).
- * Devuelve LEAN con classId populado (solo name) o null.
+ * Popula classId con campos necesarios para pasivas.
  */
 export async function findCharacterById(id: string): Promise<CharacterLean | null> {
+  const projection = "name passiveDefault subclasses"; // campos necesarios para pasivas
   if (Types.ObjectId.isValid(id)) {
-    const byDoc = await Character.findById(id).populate<{ classId: ClassLean }>("classId", "name").lean<CharacterLean>().exec();
-    if (byDoc) return byDoc;
+    const byDoc = await Character.findById(id).populate<{ classId: any }>("classId", projection).lean<CharacterLean>().exec();
+    if (byDoc) {
+      if (DBG) console.log("[CHAR] findCharacterById por _id OK:", byDoc._id);
+      return byDoc;
+    }
   }
 
-  const byUser = await Character.findOne({ userId: id }).populate<{ classId: ClassLean }>("classId", "name").lean<CharacterLean>().exec();
+  const byUser = await Character.findOne({ userId: id }).populate<{ classId: any }>("classId", projection).lean<CharacterLean>().exec();
 
+  if (DBG) console.log("[CHAR] findCharacterById por userId:", byUser?._id);
   return byUser ?? null;
 }
 
 /**
- * Aplica recompensas (XP, nivel, loot e inventario) y persiste.
- * Retorna personaje actualizado (lean + classId.name).
+ * Aplica recompensas (XP/niveles/loot) y devuelve personaje actualizado.
  */
 export async function grantRewardsAndLoot({ player, enemy, battleLog }: { player: CharacterLean; enemy: EnemyLean; battleLog?: string[] }) {
   const doc = await Character.findById(player._id);
   if (!doc) throw new Error("Character not found to grant rewards");
 
-  const xpGained = Math.max(0, Number(enemy?.xpReward ?? 0));
-  const goldGained = Math.max(0, Number(enemy?.goldReward ?? 0));
+  const xpGained = Math.max(0, Number((enemy as any)?.xpReward ?? 0));
+  const goldGained = Math.max(0, Number((enemy as any)?.goldReward ?? 0));
 
-  // XP + level up
-  doc.experience = (doc.experience ?? 0) + xpGained;
+  const beforeXP = doc.experience ?? 0;
+  const beforeLevel = doc.level ?? 1;
+
+  doc.experience = beforeXP + xpGained;
   const levelUps: number[] = [];
   while ((doc.experience ?? 0) >= xpNeededFor((doc.level ?? 1) + 1)) {
     doc.level = (doc.level ?? 1) + 1;
     levelUps.push(doc.level);
   }
 
-  // Nombre de clase para sesgar loot
   const playerClassName = getPopulatedClassName(player, (doc as any)?.classId?.name as PlayerClassName | undefined);
-
-  // Loot
   const drops = await rollLootForEnemy(enemy, playerClassName);
 
-  // Inventario sin duplicados (guardamos ids string)
   doc.inventory = (doc.inventory as any) || [];
   for (const it of drops) {
     const id = String((it as any)._id ?? (it as any).id ?? "");
@@ -65,12 +70,23 @@ export async function grantRewardsAndLoot({ player, enemy, battleLog }: { player
     if (!exists) (doc.inventory as any[]).push(id);
   }
 
-  // Si llevás oro, descomenta:
-  // doc.gold = (doc.gold ?? 0) + goldGained;
-
   await doc.save();
 
-  const updated = await Character.findById(doc._id).populate<{ classId: ClassLean }>("classId", "name").lean<CharacterLean>().exec();
+  const updated = await Character.findById(doc._id).populate<{ classId: any }>("classId", "name passiveDefault subclasses").lean<CharacterLean>().exec();
+
+  if (DBG) {
+    console.log("[REWARDS] Aplicadas:", {
+      charId: String(doc._id),
+      xpGained,
+      goldGained,
+      beforeXP,
+      afterXP: doc.experience,
+      beforeLevel,
+      afterLevel: doc.level,
+      levelUps,
+      drops: drops.map((d) => String((d as any)._id ?? (d as any).id ?? "?")),
+    });
+  }
 
   return { xpGained, goldGained, levelUps, drops, character: updated };
 }
