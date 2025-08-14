@@ -1,4 +1,3 @@
-// src/controllers/allocatePoints.controller.ts
 import type { Request, Response } from "express";
 import { Types } from "mongoose";
 import { Character } from "../models/Character";
