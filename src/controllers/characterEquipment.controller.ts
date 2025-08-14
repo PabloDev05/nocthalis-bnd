@@ -210,17 +210,34 @@ export async function getProgression(req: AuthReq, res: Response) {
 
     const level = character.level || 1;
     const experience = character.experience || 0;
-    const nextLevelAt = xpNeededFor(level + 1);
-    const xpToNext = Math.max(0, nextLevelAt - experience);
 
-    return res.json({ level, experience, nextLevelAt, xpToNext });
+    // Umbrales acumulados de XP para inicio y fin del nivel actual
+    const currentLevelAt = level > 1 ? xpNeededFor(level) : 0;
+    const nextLevelAt = xpNeededFor(level + 1);
+
+    const xpForThisLevel = Math.max(1, nextLevelAt - currentLevelAt);
+    const xpSinceLevel = Math.max(0, experience - currentLevelAt);
+    const xpToNext = Math.max(0, nextLevelAt - experience);
+    const xpPercent = Math.min(1, xpSinceLevel / xpForThisLevel);
+
+    return res.json({
+      level,
+      experience,
+      currentLevelAt,
+      nextLevelAt,
+      xpSinceLevel,
+      xpForThisLevel,
+      xpToNext,
+      xpPercent,
+    });
   } catch (err) {
     console.error("getProgression error:", err);
     return res.status(500).json({ message: "Error interno" });
   }
 }
 
-// Curva simple
+// Curva: XP acumulada requerida para ALCANZAR el nivel 'level' (incluye el propio).
+// Mantengo tu fórmula y corrijo el caso nivel 1 desde el controlador.
 function xpNeededFor(level: number) {
   return Math.floor(100 + level * level * 20);
 }
