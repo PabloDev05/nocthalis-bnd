@@ -200,6 +200,7 @@ CharacterSchema.virtual("id").get(function (this: { _id: Types.ObjectId }) {
   return this._id.toString();
 });
 
+CharacterSchema.index({ level: -1 });
 export const Character = (mongoose.models.Character as mongoose.Model<CharacterDocument>) || mongoose.model<CharacterDocument>("Character", CharacterSchema);
 
 export type { CharacterDocument as TCharacterDoc };

@@ -1,4 +1,3 @@
-// src/models/User.ts
 import mongoose, { Schema, Document, Types } from "mongoose";
 
 export interface UserDocument extends Document<Types.ObjectId> {
@@ -9,7 +8,8 @@ export interface UserDocument extends Document<Types.ObjectId> {
   subClass: string;
   characterClass: Types.ObjectId | null; // ref a CharacterClass
   classChosen: boolean;
-  id: string; // virtual expuesto en JSON
+  lastSeen?: Date;
+  id: string;
 }
 
 const userSchema = new Schema<UserDocument>(
@@ -27,6 +27,7 @@ const userSchema = new Schema<UserDocument>(
     },
 
     classChosen: { type: Boolean, default: false },
+    lastSeen: { type: Date, default: Date.now, index: true },
   },
   {
     timestamps: true,
@@ -34,9 +35,8 @@ const userSchema = new Schema<UserDocument>(
     toJSON: {
       virtuals: true,
       transform: (_doc, ret) => {
-        // id como string, ocultamos _id para el cliente
         ret.id = ret._id?.toString();
-        Reflect.deleteProperty(ret as any, "_id"); // evita TS2790
+        Reflect.deleteProperty(ret as any, "_id");
         return ret;
       },
     },
@@ -51,7 +51,6 @@ const userSchema = new Schema<UserDocument>(
   }
 );
 
-// virtual id por si accedés en docs hidratados
 userSchema.virtual("id").get(function (this: { _id: Types.ObjectId }) {
   return this._id.toString();
 });

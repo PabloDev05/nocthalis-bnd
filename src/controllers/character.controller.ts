@@ -1,4 +1,4 @@
-import { Request, Response } from "express";
+import { Request, RequestHandler, Response } from "express";
 import { Types } from "mongoose";
 import { Character } from "../models/Character";
 import { CharacterClass } from "../models/CharacterClass";
@@ -112,15 +112,14 @@ function roundCombatStatsForResponse(cs: Record<string, number>) {
   return c;
 }
 
-export const getMyCharacter = async (req: AuthenticatedRequest, res: Response) => {
+export const getMyCharacter: RequestHandler = async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const userId = (req as any).user?.id; // si tu requireAuth agrega user
     if (!userId) return res.status(401).json({ message: "No autenticado" });
 
     const characterDoc = await Character.findOne({ userId });
     if (!characterDoc) return res.status(404).json({ message: "Personaje no encontrado" });
 
-    // Traemos la clase con baseStats para el cálculo de availablePoints
     const baseClassDoc = await CharacterClass.findById(characterDoc.classId).select("name iconName imageMainClassUrl passiveDefault subclasses baseStats");
     if (!baseClassDoc) return res.status(404).json({ message: "Clase base no encontrada" });
 
@@ -128,25 +127,21 @@ export const getMyCharacter = async (req: AuthenticatedRequest, res: Response) =
     const baseClassRaw = baseClassDoc.toObject();
     const baseClass = mapClassMeta(baseClassRaw);
 
-    // Subclase seleccionada
-    const subclassIdStr = ch.subclassId ? ch.subclassId.toString() : null;
+    const subclassIdStr = ch.subclassId ? String(ch.subclassId) : null;
     const selectedSubclass = subclassIdStr && Array.isArray(baseClass.subclasses) ? baseClass.subclasses.find((s) => s.id === subclassIdStr) ?? null : null;
 
-    // >>> TIPOS ARREGLADOS AQUÍ
     const statsBS: BaseStats = coerceBaseStats(ch.stats);
     const baseBS: BaseStats = coerceBaseStats(baseClassRaw.baseStats);
 
-    // Puntos disponibles contra template
     const availablePoints = computeAvailablePoints(Number(ch.level ?? 1), statsBS, baseBS);
     if (DBG) console.log("[/character/me] availablePoints:", availablePoints);
 
-    // Redondeo de salida
     const combatStatsRounded = roundCombatStatsForResponse(ch.combatStats || {});
 
     const payload: CharacterResponseDTO = {
       id: String(characterDoc._id),
       userId: ch.userId,
-      username: req.user!.username,
+      username: (req as any).user!.username,
       class: baseClass,
       selectedSubclass,
       level: ch.level,
@@ -159,7 +154,7 @@ export const getMyCharacter = async (req: AuthenticatedRequest, res: Response) =
       passivesUnlocked: ch.passivesUnlocked,
       createdAt: ch.createdAt,
       updatedAt: ch.updatedAt,
-      availablePoints, // 👈 listo para UI
+      availablePoints,
     };
 
     return res.json(payload);
