@@ -1,16 +1,21 @@
-import express from "express";
+import { Router } from "express";
 import { requireAuth } from "../middleware/requireAuth";
 import { simulateCombatPreviewController, simulateCombatController, resolveCombatController } from "../controllers/simulateCombat.controller";
+import { getCombatResultsController, getCombatResultDetailController } from "../controllers/combatResult.controller";
 
-const combatRoutes = express.Router();
+const combatRoutes = Router();
 
-// 🧪 Simulación de combate con datos mock (sin auth, no persiste)
+// 🧪 Fixtures (público, sin auth)
 combatRoutes.get("/combat/simulate", simulateCombatPreviewController);
 
-// 🔍 Simulación real con datos del jugador (con auth, no persiste)
+// 🔍 Preview real (auth, NO persiste)
 combatRoutes.post("/combat/simulate", requireAuth, simulateCombatController);
 
-// ⚔️ Combate real que persiste XP, oro y loot (con auth)
+// ⚔️ Resolver (auth, PERSISTE)
 combatRoutes.post("/combat/resolve", requireAuth, resolveCombatController);
+
+// 🗂️ Historial (auth)
+combatRoutes.get("/combat/results", requireAuth, getCombatResultsController);
+combatRoutes.get("/combat/results/:id", requireAuth, getCombatResultDetailController);
 
 export default combatRoutes;

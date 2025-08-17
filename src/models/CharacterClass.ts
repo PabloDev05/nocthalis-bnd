@@ -2,13 +2,8 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
 import { CharacterClass as CharacterClassInterface } from "../interfaces/character/CharacterClass.interface";
 
-/**
- * NOTAS:
- * - Subclases con _id propio (ObjectId) + slug opcional indexado.
- * - toJSON mapea _id → id (string) y oculta _id.
- */
-
-export interface CharacterClassDocument extends CharacterClassInterface, Document<Types.ObjectId> {
+/** Documento Mongo: igual a tu interfaz de dominio pero SIN _id/id (las aporta Mongoose) */
+export interface CharacterClassDocument extends Omit<CharacterClassInterface, "_id" | "id">, Document<Types.ObjectId> {
   _id: Types.ObjectId;
   id: string;
 }
@@ -18,6 +13,8 @@ const PassiveSchema = new Schema(
     name: { type: String, required: true },
     description: { type: String, required: true },
     detail: { type: String },
+    // Si quisieras guardar modifiers en BD:
+    // modifiers: { type: Schema.Types.Mixed, default: undefined },
   },
   { _id: true }
 );
@@ -94,7 +91,7 @@ const CombatStatsSchema = new Schema(
 
 const CharacterClassSchema = new Schema<CharacterClassDocument>(
   {
-    name: { type: String, required: true, index: true /* unique si seed fija */ },
+    name: { type: String, required: true, index: true },
     description: { type: String, default: "" },
     iconName: { type: String, required: true },
     imageMainClassUrl: { type: String, required: true },
@@ -129,7 +126,7 @@ const CharacterClassSchema = new Schema<CharacterClassDocument>(
   }
 );
 
-// virtual id por si accedés a docs hidratados
+// virtual id
 CharacterClassSchema.virtual("id").get(function (this: { _id: Types.ObjectId }) {
   return this._id.toString();
 });

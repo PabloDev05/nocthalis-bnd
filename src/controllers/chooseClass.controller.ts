@@ -1,4 +1,3 @@
-// src/controllers/chooseClass.controller.ts
 import { Request, Response } from "express";
 import mongoose, { Types } from "mongoose";
 import { User, type UserDocument } from "../models/User";
@@ -45,12 +44,12 @@ export const chooseClass = async (req: AuthReq, res: Response) => {
       return res.status(404).json({ message: "Clase no encontrada" });
     }
 
-    // Crear personaje inicial
+    // Fuente de verdad = Character: clonamos valores base iniciales
     const character = await Character.create(
       [
         {
           userId: user._id,
-          classId: charClass._id, // ObjectId tipado
+          classId: charClass._id,
           level: 1,
           experience: 0,
           stats: charClass.baseStats,
@@ -63,15 +62,14 @@ export const chooseClass = async (req: AuthReq, res: Response) => {
       { session }
     ).then((docs) => docs[0]);
 
-    // Actualizar user
-    user.characterClass = charClass._id; // ✅ ahora es Types.ObjectId
+    user.characterClass = charClass._id;
     user.classChosen = true;
     await user.save({ session });
 
     await session.commitTransaction();
 
-    // Respuesta (podemos poblar classId para el front)
-    const characterPopulated = await Character.findById(character._id).populate("classId").lean();
+    // ⚠️ Al responder: populate solo metadatos de la clase (no stats del template)
+    const characterPopulated = await Character.findById(character._id).populate({ path: "classId", select: "name iconName imageMainClassUrl passiveDefault subclasses" }).lean();
 
     return res.status(200).json({
       message: "Clase asignada con éxito.",

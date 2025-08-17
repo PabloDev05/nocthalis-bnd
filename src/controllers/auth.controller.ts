@@ -1,4 +1,3 @@
-// controllers/auth.controller.ts
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { CharacterClass } from "../models/CharacterClass";
@@ -8,7 +7,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
 export const register = async (req: Request, res: Response) => {
-  const { username, password, email, characterClass } = req.body; // characterClass debe ser el _id de la clase
+  const { username, password, email, characterClass } = req.body;
 
   if (!username || !password || !email || !characterClass) {
     return res.status(400).json({ message: "Faltan campos requeridos" });
@@ -21,9 +20,14 @@ export const register = async (req: Request, res: Response) => {
 
   const session = await mongoose.startSession();
   session.startTransaction();
+
   try {
     const clazz = await CharacterClass.findById(characterClass).session(session);
-    if (!clazz) return res.status(404).json({ message: "Clase no encontrada" });
+    if (!clazz) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: "Clase no encontrada" });
+    }
 
     const passwordHash = await bcrypt.hash(password, 10);
 
@@ -34,13 +38,12 @@ export const register = async (req: Request, res: Response) => {
           email,
           password: passwordHash,
           classChosen: true,
-          characterClass: clazz._id, // guardar ObjectId
+          characterClass: clazz._id, // ObjectId
         },
       ],
       { session }
     ).then((r) => r[0]);
 
-    // crea el personaje con stats base de la clase
     await Character.create(
       [
         {
@@ -50,7 +53,7 @@ export const register = async (req: Request, res: Response) => {
           experience: 0,
           stats: clazz.baseStats,
           resistances: clazz.resistances,
-          combatStats: clazz.combatStats, // opcional, si querés iniciar con estos
+          combatStats: clazz.combatStats,
           passivesUnlocked: [clazz.passiveDefault?.name].filter(Boolean),
         },
       ],
@@ -60,7 +63,12 @@ export const register = async (req: Request, res: Response) => {
     await session.commitTransaction();
     session.endSession();
 
-    const token = jwt.sign({ userId: newUser._id, username: newUser.username }, process.env.JWT_SECRET!, { expiresIn: "1h" });
+    const secret = process.env.JWT_SECRET!;
+    const token = jwt.sign(
+      { id: newUser._id.toString(), username: newUser.username }, // 👈 unificado
+      secret,
+      { expiresIn: "1h", algorithm: "HS256" }
+    );
 
     return res.status(201).json({
       message: "Usuario registrado correctamente",
@@ -84,10 +92,15 @@ export const login = async (req: Request, res: Response) => {
   const user = await User.findOne({ username }).lean();
   if (!user) return res.status(400).json({ message: "Credenciales inválidas" });
 
-  const isMatch = await bcrypt.compare(password, user.password);
+  const isMatch = await bcrypt.compare(password, (user as any).password);
   if (!isMatch) return res.status(400).json({ message: "Credenciales inválidas" });
 
-  const token = jwt.sign({ id: user._id.toString(), username: user.username }, process.env.JWT_SECRET!, { expiresIn: "1h" });
+  const secret = process.env.JWT_SECRET!;
+  const token = jwt.sign(
+    { id: user._id.toString(), username: user.username }, // 👈 igual que register
+    secret,
+    { expiresIn: "1h", algorithm: "HS256" }
+  );
 
   return res.json({
     token,

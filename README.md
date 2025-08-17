@@ -1,11 +1,12 @@
 # ⚔️ NOCTHALIS — Backend RPG (Turnos) · Enemigos · Loot
 
-**Autor:** Pablo Serratti — *Todos los derechos reservados.*  
+**Autor:** Pablo Serratti — _Todos los derechos reservados._  
 **Aviso:** Nocthalis es una creación original de **Pablo Serratti**. Se prohíbe la copia o uso comercial sin autorización expresa del autor.
 
 ---
 
 ## 🧭 Índice
+
 - [Qué es Nocthalis](#qué-es-nocthalis)
 - [Stack](#stack)
 - [Estructura de carpetas](#estructura-de-carpetas)
@@ -24,7 +25,9 @@
 ---
 
 ## Qué es Nocthalis
+
 Backend de **juego RPG por turnos** con:
+
 - Autenticación, creación de personaje por **clase** y **subclase** (a nivel 10).
 - Combate **PvE**: `preview` (sin persistir) y `resolve` (persiste XP/loot).
 - Ecosistema de **enemigos** (tiers y bosses), **drop system** con rarezas y 9 **slots** de equipo.
@@ -33,6 +36,7 @@ Backend de **juego RPG por turnos** con:
 ---
 
 ## Stack
+
 - **Node.js** + **Express** · **TypeScript**
 - **MongoDB** + **Mongoose**
 - **JWT** (middleware `requireAuth`)
@@ -41,6 +45,7 @@ Backend de **juego RPG por turnos** con:
 ---
 
 ## Estructura de carpetas
+
 ```
 src/
 ├─ classes/
@@ -105,28 +110,32 @@ src/
 ## Rutas & Endpoints
 
 **Auth (`auth.routes.ts`)**
+
 - `POST /auth/register`
 - `POST /auth/login`
 
 **Character (`character.routes.ts`)**
+
 - `GET /character/classes`
-- `POST /character/choose-class` *(auth)*
-- `POST /character/choose-subclass` *(auth)*
-- `GET /character/me` *(auth)*
-- `GET /character/inventory` *(auth)*
-- `POST /character/equip` *(auth)*
-- `POST /character/unequip` *(auth)*
-- `POST /character/use-item` *(auth)*
-- `GET /character/progression` *(auth)*
+- `POST /character/choose-class` _(auth)_
+- `POST /character/choose-subclass` _(auth)_
+- `GET /character/me` _(auth)_
+- `GET /character/inventory` _(auth)_
+- `POST /character/equip` _(auth)_
+- `POST /character/unequip` _(auth)_
+- `POST /character/use-item` _(auth)_
+- `GET /character/progression` _(auth)_
 
 **Combat (`combat.routes.ts`)**
-- `GET /combat/simulate` *(fixtures, sin auth)*
-- `POST /combat/simulate` *(auth, no persiste)*
-- `POST /combat/resolve` *(auth, persiste XP + loot)*
+
+- `GET /combat/simulate` _(fixtures, sin auth)_
+- `POST /combat/simulate` _(auth, no persiste)_
+- `POST /combat/resolve` _(auth, persiste XP + loot)_
 
 ---
 
 ## Controladores (resumen)
+
 - **auth.controller.ts** → `register`, `login` (transacción al registrar: User + Character).
 - **character.controller.ts** → `getMyCharacter` (incluye clase y subclase si existe).
 - **characterEquipment.controller.ts** → `getInventory`, `equipItem`, `unequipItem`, `useConsumable`, `getProgression` (valida slots y nivel).
@@ -138,6 +147,7 @@ src/
 ---
 
 ## Modelos
+
 - **User**: `username`, `email`, `password`, `characterClass: ObjectId | null`, `classChosen: boolean` (virtual `id`).
 - **Character**: `userId`, `classId`, `subclassId`, `level`, `experience`, `stats`, `resistances`, `combatStats`, `inventory: string[]`, `equipment` (9 slots). Defaults y virtual `id`.
 - **CharacterClass**: `name`, `description`, `iconName`, `imageMainClassUrl`, `passiveDefault`, `subclasses[]`, `baseStats`, `resistances`, `combatStats` (virtual `id`).
@@ -147,6 +157,7 @@ src/
 ---
 
 ## Servicios
+
 - **combat/builders.ts** → `buildPlayerCharacter(id)`, `buildEnemyById(id)` (completa defaults y devuelve clases POO).
 - **combat/simulateCombat.ts** → adapta al `CombatManager` en modos `fixtures`, `real-preview`, `real`.
 - **character.service.ts** → `findCharacterById`, `grantRewardsAndLoot` (aplica XP/nivel y agrega drops al inventario).
@@ -156,6 +167,7 @@ src/
 ---
 
 ## Seeds y scripts
+
 - **generateEnemies.ts**: 50 enemigos exactos (3 por nivel 1..15) + miniboss (4,8,12) + boss (10,15). RNG determinístico, arquetipos, resistencias por banda, `dropProfile` y recompensas.
 - **seedItems.ts**: catálogo por **slot × tramo de nivel × rareza** (Novato 1–5, Veterano 6–10, Maestro 11–15) + consumibles y materiales.
 - **seedCharacterClasses.ts**: Guerrero, Mago, Asesino, Arquero (con pasivas y subclases).
@@ -165,6 +177,7 @@ src/
 ---
 
 ## Motor de combate
+
 - **PlayerCharacter / EnemyBot** implementan `CombatEntity` (HP y daño directo, método `isAlive`).
 - **CombatManager**:
   - Daño: `floor(attackPower * (1 - damageReduction/100))`.
@@ -174,17 +187,41 @@ src/
 ---
 
 ## Loot y rarezas
+
 - Cada enemigo tiene `dropProfile` con:
   - `rolls`, `rarityChances`, `slotWeights`, `guaranteedMinRarity?`.
 - Distribución típica no-boss: common 60–70, uncommon 25–35, rare 5–12, epic 0–6, legendary 0–1.
 - Boss ajusta hacia `rare/epic/legendary` y sube `rolls`.
 - **utils/loot.ts (stub actual)**: toma 0–2 ítems al azar del catálogo (útil para pruebas).
 
+# Resistencias (plan)
+
+- **Escala:** 0–100.
+- **Proc de estado:** `chanceEfectiva = chanceBase * (1 - res/100)`.
+- **Reducción de crítico:**
+  - `criticalChanceReduction` resta a la CHANCE de crítico del atacante.
+  - `criticalDamageReduction` resta al BONUS de daño crítico del atacante (en %).
+- **Orden de cálculo (combate):**
+  1. base dmg → 2) crit → 3) mitigación por defensa → 4) block → 5) `damageReduction` → 6) **hooks** → 7) varianza.
+  2. Aplicar estados (futuro): usar resistencias para el proc.
+- **Eventos reservados (futuro estados):**
+  - `player:burn`, `enemy:burn`
+  - `player:freeze`, `enemy:freeze`
+  - `player:shock`, `enemy:shock`
+  - `player:poison`, `enemy:poison`
+  - `player:sleep`, `enemy:sleep`
+  - `player:stun`, `enemy:stun`
+  - `player:bleed`, `enemy:bleed`
+  - `player:curse`, `enemy:curse`
+  - `player:knockback`, `enemy:knockback`
+  - `resist:*` (si el objetivo resiste el estado)
+
 ---
 
 ## Diagramas
 
 ### 1) Arquitectura (Rutas → Controladores → Servicios)
+
 ```mermaid
 flowchart LR
   subgraph Routes
@@ -225,6 +262,7 @@ flowchart LR
 ```
 
 ### 2) Auth + Registro / Login
+
 ```mermaid
 sequenceDiagram
   participant Client
@@ -247,6 +285,7 @@ sequenceDiagram
 ```
 
 ### 3) PvE: Simulación vs Resolución
+
 ```mermaid
 flowchart TB
   A[POST combat/simulate · auth] --> B[simulateCombatController]
@@ -263,6 +302,7 @@ flowchart TB
 ```
 
 ### 4) Inventario y Equipo
+
 ```mermaid
 sequenceDiagram
   participant Client
@@ -281,6 +321,7 @@ sequenceDiagram
 ```
 
 ### 5) Relación de Modelos
+
 ```mermaid
 classDiagram
   class User { username; email; password; characterClass; classChosen }
@@ -295,6 +336,7 @@ classDiagram
 ```
 
 ### 6) Pipeline de Loot
+
 ```mermaid
 flowchart LR
   DP[dropProfile] --> R1[decidir rareza]
@@ -310,6 +352,7 @@ flowchart LR
 ---
 
 ## Instalación
+
 1. **Instalar dependencias**
    ```bash
    npm install
@@ -333,6 +376,7 @@ flowchart LR
 ---
 
 ## FAQ
+
 **¿Qué diferencia hay entre simulate y resolve?**  
 `simulate` no persiste; `resolve` guarda XP y loot.
 
@@ -351,5 +395,6 @@ Solo en **desarrollo**: en producción aborta por seguridad.
 ---
 
 ## Créditos y derechos
+
 **Nocthalis** fue creado por **Pablo Serratti**.  
-© 2025 Pablo Serratti. *Todos los derechos reservados.*
+© 2025 Pablo Serratti. _Todos los derechos reservados._

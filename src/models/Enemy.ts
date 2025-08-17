@@ -206,8 +206,8 @@ const EnemySchema = new Schema<EnemyDoc>(
     toJSON: {
       virtuals: true,
       transform: (_doc, ret) => {
-        ret.id = ret._id;
-        delete ret._id;
+        ret.id = ret._id?.toString();
+        Reflect.deleteProperty(ret as any, "_id");
         return ret;
       },
     },
