@@ -5,6 +5,7 @@ import { CharacterClass } from "../models/CharacterClass";
 import { computeAvailablePoints, sumAllocations, applyAllocationsToCharacter } from "../services/allocation.service";
 import { POINTS_PER_LEVEL } from "../constants/allocateCoeffs";
 import type { BaseStats } from "../interfaces/character/CharacterClass.interface";
+import { roundCombatStatsForResponse } from "../utils/characterFormat";
 
 const DBG = process.env.DEBUG_ALLOCATION === "1";
 
@@ -14,7 +15,8 @@ interface AuthReq extends Request {
 
 type AllocateBody = {
   characterId?: string;
-  allocations: Record<string, number>;
+  allocations?: Record<string, number>;
+  allocate?: Record<string, number>; // alias aceptado por el front
 };
 
 /* ------------------------ helpers ------------------------ */
@@ -73,15 +75,6 @@ function roundDeltaCombatForResponse(delta: Record<string, number> = {}) {
   return d;
 }
 
-// Redondeo SOLO de evasion y attackSpeed en character.combatStats (respuesta)
-function roundCharacterCombatForResponse(cs: Record<string, number> | undefined | null) {
-  if (!cs) return cs;
-  const c = { ...cs };
-  if (c.evasion != null) c.evasion = toFixedN(c.evasion, 2);
-  if (c.attackSpeed != null) c.attackSpeed = toFixedN(c.attackSpeed, 2);
-  return c;
-}
-
 // Obtiene { name, baseStats } de la clase del personaje (via populate o consulta)
 async function getClassTemplateFromCharacter(doc: any): Promise<{ name: string; baseStats: BaseStats } | null> {
   const classField = doc?.classId;
@@ -113,13 +106,17 @@ async function getClassTemplateFromCharacter(doc: any): Promise<{ name: string; 
 
 export async function allocatePointsController(req: AuthReq, res: Response) {
   try {
-    const { characterId, allocations } = (req.body || {}) as AllocateBody;
+    const body = (req.body || {}) as AllocateBody;
+
+    // tolerante a allocations o allocate
+    const allocations = (body.allocations ?? body.allocate) as Record<string, number> | undefined;
+
     if (!allocations || typeof allocations !== "object") {
       return res.status(400).json({ message: "allocations requerido (objeto con puntos por stat)" });
     }
 
     const auth = req.user || {};
-    const candidates = [characterId, auth.characterId, auth.character?._id, auth.characterId?._id, auth.id, auth._id, auth.userId].filter(Boolean);
+    const candidates = [body.characterId, auth.characterId, auth.character?._id, auth.characterId?._id, auth.id, auth._id, auth.userId].filter(Boolean);
 
     if (candidates.length === 0) {
       return res.status(400).json({ message: "Falta characterId o autenticación" });
@@ -171,22 +168,22 @@ export async function allocatePointsController(req: AuthReq, res: Response) {
 
     const remaining = computeAvailablePoints(Number(doc.level ?? 1), coerceBaseStats(doc.stats), cls.baseStats);
 
-    // Redondeos SOLO para respuesta
+    // ✅ Redondeos SOLO para respuesta (DB ya está guardada)
     const deltaCombatRounded = roundDeltaCombatForResponse(deltaCombat as any);
-    const combatStatsRoundedForChar = roundCharacterCombatForResponse(doc.combatStats);
+    const combatStatsRoundedForChar = roundCombatStatsForResponse(doc.combatStats || ({} as any));
 
     return res.json({
       ok: true,
       pointsPerLevel: POINTS_PER_LEVEL,
       spentThis: applied,
       deltaStats,
-      deltaCombat: deltaCombatRounded, // <- limpio para UI
+      deltaCombat: deltaCombatRounded, // limpio para UI
       availableAfter: remaining,
       character: {
         id: String(doc._id),
         level: doc.level,
         stats: doc.stats,
-        combatStats: combatStatsRoundedForChar, // <- evasion/attackSpeed con 2 decimales
+        combatStats: combatStatsRoundedForChar, // todos los campos “lindos” y consistentes
         className: cls.name,
       },
     });

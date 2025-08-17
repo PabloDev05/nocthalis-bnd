@@ -4,9 +4,10 @@ import { getCharacterClasses } from "../controllers/getCharacterClasses.controll
 import { chooseClass } from "../controllers/chooseClass.controller";
 import { chooseSubclass } from "../controllers/chooseSubClass.controller";
 import { getMyCharacter } from "../controllers/character.controller";
-import { getInventory, equipItem, unequipItem, useConsumable, getProgression } from "../controllers/characterEquipment.controller";
+import { getInventory, equipItem, unequipItem, useConsumable } from "../controllers/characterEquipment.controller";
 import { allocatePointsController } from "../controllers/allocatePoints.controller";
 import { getArenaOpponentsController, postArenaChallengeController } from "../controllers/arena.controller";
+import { getProgression } from "../controllers/characterProgression.controller"; // <- nuevo
 
 const router = Router();
 

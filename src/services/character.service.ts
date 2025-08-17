@@ -5,15 +5,12 @@ import { Types } from "mongoose";
 import { Character } from "../models/Character";
 import { rollLootForEnemy, type PlayerClassName } from "../utils/loot";
 import type { CharacterLean, ClassLean, EnemyLean } from "../types/lean";
-
-function xpNeededFor(level: number) {
-  return Math.floor(100 + level * level * 20);
-}
+import { applyExperience } from "./progression.service";
 
 function getPopulatedClassName(player: CharacterLean | null | undefined, fallback?: PlayerClassName): PlayerClassName | undefined {
   const cls = player?.classId;
   if (cls && typeof cls === "object" && "name" in cls) {
-    return (cls as ClassLean).name;
+    return (cls as ClassLean).name as PlayerClassName;
   }
   return fallback;
 }
@@ -40,16 +37,14 @@ export async function grantRewardsAndLoot({ player, enemy, battleLog }: { player
   const beforeXP = doc.experience ?? 0;
   const beforeLevel = doc.level ?? 1;
 
-  doc.experience = beforeXP + xpGained;
-  const levelUps: number[] = [];
-  while ((doc.experience ?? 0) >= xpNeededFor((doc.level ?? 1) + 1)) {
-    doc.level = (doc.level ?? 1) + 1;
-    levelUps.push(doc.level);
-  }
+  // 1) Subir XP/Nivel usando la fuente de verdad
+  const { level: afterLevel, experience: afterXP, levelUps } = await applyExperience(doc, xpGained);
 
+  // 2) Loot según clase (nombre desde populado o fallback)
   const playerClassName = getPopulatedClassName(player, (doc as any)?.classId?.name as PlayerClassName | undefined);
   const drops = await rollLootForEnemy(enemy, playerClassName);
 
+  // 3) Agregar al inventario (evitando duplicados)
   doc.inventory = (doc.inventory as any) || [];
   for (const it of drops) {
     const id = String((it as any)._id ?? (it as any).id ?? "");
@@ -58,8 +53,10 @@ export async function grantRewardsAndLoot({ player, enemy, battleLog }: { player
     if (!exists) (doc.inventory as any[]).push(id);
   }
 
+  // Guardamos nuevamente (applyExperience ya guardó level/exp)
   await doc.save();
 
+  // Refrescar representacion final con classId poblada
   const updated = await Character.findById(doc._id).populate<{ classId: any }>("classId", "name passiveDefault subclasses").lean<CharacterLean>().exec();
 
   if (DBG) {
@@ -68,9 +65,9 @@ export async function grantRewardsAndLoot({ player, enemy, battleLog }: { player
       xpGained,
       goldGained,
       beforeXP,
-      afterXP: doc.experience,
+      afterXP,
       beforeLevel,
-      afterLevel: doc.level,
+      afterLevel,
       levelUps,
       drops: drops.map((d) => String((d as any)._id ?? (d as any).id ?? "?")),
     });
@@ -91,23 +88,16 @@ export async function grantPvpExperience({ userId, xpGained }: { userId: string;
   const beforeXP = doc.experience ?? 0;
   const beforeLevel = doc.level ?? 1;
 
-  doc.experience = (doc.experience ?? 0) + Math.max(0, xpGained);
-  const levelUps: number[] = [];
-  while ((doc.experience ?? 0) >= xpNeededFor((doc.level ?? 1) + 1)) {
-    doc.level = (doc.level ?? 1) + 1;
-    levelUps.push(doc.level);
-  }
-
-  await doc.save();
+  const { level: afterLevel, experience: afterXP, levelUps } = await applyExperience(doc, Math.max(0, xpGained));
 
   if (DBG) {
     console.log("[REWARDS PvP] XP aplicada:", {
       userId,
       xpGained,
       beforeXP,
-      afterXP: doc.experience,
+      afterXP,
       beforeLevel,
-      afterLevel: doc.level,
+      afterLevel,
       levelUps,
     });
   }

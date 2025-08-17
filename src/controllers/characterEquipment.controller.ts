@@ -2,10 +2,8 @@ import { Request, Response } from "express";
 import { Types } from "mongoose";
 import { Character, type Equipment, type EquipmentSlot } from "../models/Character";
 import { Item, type ItemLean } from "../models/Item";
-
-interface AuthReq extends Request {
-  user?: { id: string };
-}
+import { computeProgression } from "../services/progression.service";
+import type { AuthReq } from "../middleware/requireAuth";
 
 // Claves de slot válidas (desde el tipo del modelo)
 const ALLOWED_SLOTS: readonly EquipmentSlot[] = ["helmet", "chest", "gloves", "boots", "mainWeapon", "offWeapon", "ring", "belt", "amulet"] as const;
@@ -199,7 +197,7 @@ export async function useConsumable(req: AuthReq, res: Response) {
   }
 }
 
-/** GET /character/progression */
+/** GET /character/progression  — usa la curva acumulativa */
 export async function getProgression(req: AuthReq, res: Response) {
   try {
     const userId = req.user?.id;
@@ -208,36 +206,24 @@ export async function getProgression(req: AuthReq, res: Response) {
     const character = await Character.findOne({ userId }).lean();
     if (!character) return res.status(404).json({ message: "Personaje no encontrado" });
 
-    const level = character.level || 1;
-    const experience = character.experience || 0;
+    const exp = Number(character.experience ?? 0);
+    const lvl = Number(character.level ?? 1);
 
-    // Umbrales acumulados de XP para inicio y fin del nivel actual
-    const currentLevelAt = level > 1 ? xpNeededFor(level) : 0;
-    const nextLevelAt = xpNeededFor(level + 1);
-
-    const xpForThisLevel = Math.max(1, nextLevelAt - currentLevelAt);
-    const xpSinceLevel = Math.max(0, experience - currentLevelAt);
-    const xpToNext = Math.max(0, nextLevelAt - experience);
-    const xpPercent = Math.min(1, xpSinceLevel / xpForThisLevel);
+    const p = computeProgression(exp, lvl);
 
     return res.json({
-      level,
-      experience,
-      currentLevelAt,
-      nextLevelAt,
-      xpSinceLevel,
-      xpForThisLevel,
-      xpToNext,
-      xpPercent,
+      level: p.level,
+      experience: exp,
+      currentLevelAt: p.currentLevelAt,
+      nextLevelAt: p.nextLevelAt,
+      xpSinceLevel: p.xpSinceLevel,
+      xpForThisLevel: p.xpForThisLevel,
+      xpToNext: p.xpToNext,
+      xpPercent: p.xpPercent,
+      isMaxLevel: p.isMaxLevel,
     });
   } catch (err) {
     console.error("getProgression error:", err);
     return res.status(500).json({ message: "Error interno" });
   }
-}
-
-// Curva: XP acumulada requerida para ALCANZAR el nivel 'level' (incluye el propio).
-// Mantengo tu fórmula y corrijo el caso nivel 1 desde el controlador.
-function xpNeededFor(level: number) {
-  return Math.floor(100 + level * level * 20);
 }

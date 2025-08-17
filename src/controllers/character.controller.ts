@@ -1,15 +1,13 @@
-import { Request, RequestHandler, Response } from "express";
+// src/controllers/character.controller.ts
+import { RequestHandler } from "express";
 import { Types } from "mongoose";
 import { Character } from "../models/Character";
 import { CharacterClass } from "../models/CharacterClass";
 import { computeAvailablePoints } from "../services/allocation.service";
-import type { BaseStats } from "../interfaces/character/CharacterClass.interface";
+import type { BaseStats, CombatStats, Resistances } from "../interfaces/character/CharacterClass.interface";
+import { roundCombatStatsForResponse } from "../utils/characterFormat";
 
 const DBG = process.env.DEBUG_ALLOCATION === "1";
-
-interface AuthenticatedRequest extends Request {
-  user?: { id: string; username: string };
-}
 
 /** DTOs */
 type PassiveDTO = { id: string; name: string; description: string; detail?: string };
@@ -38,9 +36,9 @@ type CharacterResponseDTO = {
   selectedSubclass: SubclassDTO | null;
   level: number;
   experience: number;
-  stats: Record<string, number>;
-  resistances: Record<string, number>;
-  combatStats: Record<string, number>;
+  stats: BaseStats; // ← tipado real
+  resistances: Resistances; // ← tipado real
+  combatStats: CombatStats; // ← tipado real
   equipment: Record<string, string | null>;
   inventory: string[];
   passivesUnlocked: string[];
@@ -86,35 +84,10 @@ function coerceBaseStats(src: any): BaseStats {
   };
 }
 
-/** Redondeo de combatStats solo para RESPUESTA */
-function toFixedN(n: any, places: number) {
-  const v = Number(n);
-  if (!Number.isFinite(v)) return 0;
-  const p = Math.pow(10, places);
-  return Math.round(v * p) / p;
-}
-function roundCombatStatsForResponse(cs: Record<string, number>) {
-  const c = { ...(cs as any) };
-  c.maxHP = Math.round(c.maxHP ?? 0);
-  c.maxMP = Math.round(c.maxMP ?? 0);
-  c.blockChance = Math.round(c.blockChance ?? 0);
-  c.lifeSteal = Math.round(c.lifeSteal ?? 0);
-  c.manaSteal = Math.round(c.manaSteal ?? 0);
-  c.attackPower = toFixedN(c.attackPower, 1);
-  c.magicPower = toFixedN(c.magicPower, 1);
-  c.criticalDamageBonus = toFixedN(c.criticalDamageBonus, 1);
-  c.attackSpeed = toFixedN(c.attackSpeed, 2);
-  c.evasion = toFixedN(c.evasion, 2);
-  c.criticalChance = toFixedN(c.criticalChance, 2);
-  c.blockValue = toFixedN(c.blockValue, 2);
-  c.damageReduction = toFixedN(c.damageReduction, 2);
-  c.movementSpeed = toFixedN(c.movementSpeed, 2);
-  return c;
-}
-
+/** GET /character/me */
 export const getMyCharacter: RequestHandler = async (req, res) => {
   try {
-    const userId = (req as any).user?.id; // si tu requireAuth agrega user
+    const userId = req.user?.id; // ✅ ahora existe en el tipo
     if (!userId) return res.status(401).json({ message: "No autenticado" });
 
     const characterDoc = await Character.findOne({ userId });
@@ -125,30 +98,38 @@ export const getMyCharacter: RequestHandler = async (req, res) => {
 
     const ch = characterDoc.toObject();
     const baseClassRaw = baseClassDoc.toObject();
-    const baseClass = mapClassMeta(baseClassRaw);
+
+    const baseClass: ClassMetaDTO = {
+      id: toId(baseClassRaw),
+      name: baseClassRaw.name,
+      iconName: baseClassRaw.iconName,
+      imageMainClassUrl: baseClassRaw.imageMainClassUrl,
+      passiveDefault: mapPassive(baseClassRaw.passiveDefault)!,
+      subclasses: Array.isArray(baseClassRaw.subclasses) ? baseClassRaw.subclasses.map(mapSubclass) : [],
+    };
 
     const subclassIdStr = ch.subclassId ? String(ch.subclassId) : null;
     const selectedSubclass = subclassIdStr && Array.isArray(baseClass.subclasses) ? baseClass.subclasses.find((s) => s.id === subclassIdStr) ?? null : null;
 
     const statsBS: BaseStats = coerceBaseStats(ch.stats);
     const baseBS: BaseStats = coerceBaseStats(baseClassRaw.baseStats);
-
     const availablePoints = computeAvailablePoints(Number(ch.level ?? 1), statsBS, baseBS);
     if (DBG) console.log("[/character/me] availablePoints:", availablePoints);
 
-    const combatStatsRounded = roundCombatStatsForResponse(ch.combatStats || {});
+    // ✅ formateo SOLO para respuesta (no toca DB)
+    const combatStatsRounded = roundCombatStatsForResponse(ch.combatStats || ({} as any));
 
     const payload: CharacterResponseDTO = {
       id: String(characterDoc._id),
       userId: ch.userId,
-      username: (req as any).user!.username,
+      username: req.user!.username,
       class: baseClass,
       selectedSubclass,
       level: ch.level,
       experience: ch.experience,
-      stats: ch.stats,
-      resistances: ch.resistances,
-      combatStats: combatStatsRounded,
+      stats: ch.stats as BaseStats,
+      resistances: ch.resistances as Resistances,
+      combatStats: combatStatsRounded, // CombatStats
       equipment: ch.equipment,
       inventory: ch.inventory,
       passivesUnlocked: ch.passivesUnlocked,

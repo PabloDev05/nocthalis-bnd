@@ -5,10 +5,7 @@ const DBG = process.env.DEBUG_COMBAT === "1";
 import { Request, Response } from "express";
 import { Types } from "mongoose";
 import { CombatResult } from "../models/CombatResult";
-
-interface AuthReq extends Request {
-  user?: { id: string };
-}
+import type { AuthReq } from "../middleware/requireAuth";
 
 type ModeFilter = "preview" | "resolve" | "pvp-preview" | "pvp-resolve";
 
