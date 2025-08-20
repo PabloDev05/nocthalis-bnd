@@ -11,9 +11,7 @@ export type Stats = {
   physicalDefense: number;
   magicalDefense: number;
   luck: number;
-  agility: number;
   endurance: number;
-  wisdom: number;
 };
 
 export type Resistances = {
@@ -37,7 +35,6 @@ export type Resistances = {
 
 export type CombatStats = {
   maxHP: number;
-  maxMP: number;
   attackPower: number;
   magicPower: number;
   criticalChance: number;
@@ -47,7 +44,6 @@ export type CombatStats = {
   blockChance: number;
   blockValue: number;
   lifeSteal: number;
-  manaSteal: number;
   damageReduction: number;
   movementSpeed: number;
 };

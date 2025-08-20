@@ -3,11 +3,7 @@ import { Types } from "mongoose";
 import { Character } from "../models/Character";
 import { CharacterClass } from "../models/CharacterClass";
 import { Match } from "../models/Match";
-import { buildCharacterSnapshot } from "../services/characterSnapshot";
-
-interface AuthenticatedRequest extends Request {
-  user?: { id: string; username: string };
-}
+import { buildCharacterSnapshot } from "../battleSystem/core/CharacterSnapshot";
 
 const toId = (x: any) => (x?._id ?? x?.id)?.toString();
 const asObjectId = (v: any) => {
@@ -16,7 +12,7 @@ const asObjectId = (v: any) => {
 };
 
 /* --------------------------------- GET /arena/opponents --------------------------------- */
-export async function getArenaOpponentsController(req: AuthenticatedRequest, res: Response) {
+export async function getArenaOpponentsController(req: Request, res: Response) {
   try {
     const meId = req.user?.id;
     if (!meId) return res.status(401).json({ message: "No autenticado" });
@@ -81,7 +77,7 @@ export async function getArenaOpponentsController(req: AuthenticatedRequest, res
 }
 
 /* -------------------------------- POST /arena/challenges -------------------------------- */
-export async function postArenaChallengeController(req: AuthenticatedRequest, res: Response) {
+export async function postArenaChallengeController(req: Request, res: Response) {
   try {
     const meId = req.user?.id;
     if (!meId) return res.status(401).json({ message: "No autenticado" });
@@ -132,18 +128,17 @@ export async function postArenaChallengeController(req: AuthenticatedRequest, re
 
     const seed = (Date.now() & 0xffffffff) ^ Math.floor(Math.random() * 0xffffffff);
 
-    // ⬇️ ⬇️ ⬇️  CAMBIO CLAVE: agregamos los 4 IDs requeridos por tu schema  ⬇️ ⬇️ ⬇️
     const match = await Match.create({
-      attackerUserId: attackerDoc.userId, // <—
-      attackerCharacterId: attackerDoc._id, // <—
-      defenderUserId: defenderDoc.userId, // <—
-      defenderCharacterId: defenderDoc._id, // <—
+      attackerUserId: attackerDoc.userId,
+      attackerCharacterId: attackerDoc._id,
+      defenderUserId: defenderDoc.userId,
+      defenderCharacterId: defenderDoc._id,
 
       attackerSnapshot,
       defenderSnapshot,
       seed,
 
-      // Campos neutros (por si tu schema los marca como required)
+      // Campos neutros para compat con tu schema previo
       mode: "pending",
       status: "pending",
       winner: null,
@@ -155,7 +150,7 @@ export async function postArenaChallengeController(req: AuthenticatedRequest, re
       rewards: null,
     });
 
-    return res.json({ matchId: toId(match?._id) });
+    return res.json({ matchId: (match._id as any).toString() });
   } catch (err: any) {
     console.error("postArenaChallengeController error:", err);
     const message = err?.errors ? `Validación: ${Object.keys(err.errors).join(", ")}` : err?.message || "Error interno del servidor";

@@ -5,6 +5,7 @@ export interface UserDocument extends Document<Types.ObjectId> {
   username: string;
   email: string;
   password: string;
+  passwordHash?: string;
   subClass: string;
   characterClass: Types.ObjectId | null; // ref a CharacterClass
   classChosen: boolean;
@@ -14,18 +15,17 @@ export interface UserDocument extends Document<Types.ObjectId> {
 
 const userSchema = new Schema<UserDocument>(
   {
-    username: { type: String, required: true, unique: true, index: true },
-    email: { type: String, required: true, unique: true, index: true },
-    password: { type: String, required: true },
+    username: { type: String, required: true, unique: true, index: true, trim: true },
+    email: { type: String, required: true, unique: true, index: true, lowercase: true, trim: true },
+    password: { type: String, required: true, select: false },
+    passwordHash: { type: String, select: false },
     subClass: { type: String, default: "" },
-
     characterClass: {
       type: Schema.Types.ObjectId,
       ref: "CharacterClass",
       default: null,
       index: true,
     },
-
     classChosen: { type: Boolean, default: false },
     lastSeen: { type: Date, default: Date.now, index: true },
   },
@@ -36,6 +36,8 @@ const userSchema = new Schema<UserDocument>(
       virtuals: true,
       transform: (_doc, ret) => {
         ret.id = ret._id?.toString();
+        Reflect.deleteProperty(ret as any, "password");
+        Reflect.deleteProperty(ret as any, "passwordHash");
         Reflect.deleteProperty(ret as any, "_id");
         return ret;
       },
@@ -44,6 +46,8 @@ const userSchema = new Schema<UserDocument>(
       virtuals: true,
       transform: (_doc, ret) => {
         ret.id = ret._id?.toString();
+        Reflect.deleteProperty(ret as any, "password");
+        Reflect.deleteProperty(ret as any, "passwordHash");
         Reflect.deleteProperty(ret as any, "_id");
         return ret;
       },

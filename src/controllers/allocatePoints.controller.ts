@@ -1,194 +1,104 @@
-import type { Request, Response } from "express";
-import { Types } from "mongoose";
+// src/controllers/allocatePoints.controller.ts
+import { Request, Response } from "express";
 import { Character } from "../models/Character";
-import { CharacterClass } from "../models/CharacterClass";
-import { computeAvailablePoints, sumAllocations, applyAllocationsToCharacter } from "../services/allocation.service";
-import { POINTS_PER_LEVEL } from "../constants/allocateCoeffs";
-import type { BaseStats } from "../interfaces/character/CharacterClass.interface";
-import { roundCombatStatsForResponse } from "../utils/characterFormat";
 
-const DBG = process.env.DEBUG_ALLOCATION === "1";
+/** Stats permitidos (sin agility ni wisdom) */
+const ALLOWED_STATS = ["strength", "dexterity", "intelligence", "vitality", "physicalDefense", "magicalDefense", "luck", "endurance"] as const;
+type AllowedStat = (typeof ALLOWED_STATS)[number];
 
-interface AuthReq extends Request {
-  user?: any; // flexible
+/** Nombres posibles del campo de “puntos sin asignar” para compat hacia atrás */
+const POINTS_FIELDS = ["statPoints", "unallocatedPoints", "pointsAvailable", "attributePoints"] as const;
+
+/** Toma un objeto cualquiera y devuelve asignaciones válidas, enteras y ≥ 0 */
+function normalizeAllocations(input: any): Partial<Record<AllowedStat, number>> {
+  const out: Partial<Record<AllowedStat, number>> = {};
+  for (const k of ALLOWED_STATS) {
+    const raw = input?.[k];
+    if (raw === undefined || raw === null) continue;
+    const n = Math.floor(Number(raw));
+    if (Number.isFinite(n) && n > 0) out[k] = n;
+  }
+  return out;
 }
 
-type AllocateBody = {
-  characterId?: string;
-  allocations?: Record<string, number>;
-  allocate?: Record<string, number>; // alias aceptado por el front
-};
-
-/* ------------------------ helpers ------------------------ */
-
-function coerceBaseStats(src: any): BaseStats {
-  return {
-    strength: Number(src?.strength ?? 0),
-    dexterity: Number(src?.dexterity ?? 0),
-    intelligence: Number(src?.intelligence ?? 0),
-    vitality: Number(src?.vitality ?? 0),
-    physicalDefense: Number(src?.physicalDefense ?? 0),
-    magicalDefense: Number(src?.magicalDefense ?? 0),
-    luck: Number(src?.luck ?? 0),
-    agility: Number(src?.agility ?? 0),
-    endurance: Number(src?.endurance ?? 0),
-    wisdom: Number(src?.wisdom ?? 0),
-  };
-}
-
-function toFixedN(n: any, places: number) {
-  const v = Number(n);
-  if (!Number.isFinite(v)) return 0;
-  const p = Math.pow(10, places);
-  return Math.round(v * p) / p;
-}
-
-// Redondeo “para respuesta” de deltaCombat (no toca DB)
-function roundDeltaCombatForResponse(delta: Record<string, number> = {}) {
-  const d = { ...delta };
-
-  // enteros
-  if (d.maxHP != null) d.maxHP = Math.round(d.maxHP);
-  if (d.blockChance != null) d.blockChance = Math.round(d.blockChance);
-
-  // 1 decimal
-  if (d.attackPower != null) d.attackPower = toFixedN(d.attackPower, 1);
-  if (d.magicPower != null) d.magicPower = toFixedN(d.magicPower, 1);
-  if (d.criticalDamageBonus != null) d.criticalDamageBonus = toFixedN(d.criticalDamageBonus, 1);
-
-  // 2 decimales
-  if (d.attackSpeed != null) d.attackSpeed = toFixedN(d.attackSpeed, 2);
-  if (d.evasion != null) d.evasion = toFixedN(d.evasion, 2);
-  if (d.criticalChance != null) d.criticalChance = toFixedN(d.criticalChance, 2);
-  if (d.blockValue != null) d.blockValue = toFixedN(d.blockValue, 2);
-  if (d.damageReduction != null) d.damageReduction = toFixedN(d.damageReduction, 2);
-  if (d.movementSpeed != null) d.movementSpeed = toFixedN(d.movementSpeed, 2);
-
-  // fallback por si aparece otra clave nueva
-  for (const k of Object.keys(d)) {
-    if (typeof d[k] === "number" && !Number.isInteger(d[k])) {
-      if (!["attackPower", "magicPower", "criticalDamageBonus", "attackSpeed", "evasion", "criticalChance", "blockValue", "damageReduction", "movementSpeed"].includes(k)) {
-        d[k] = toFixedN(d[k], 2);
-      }
+/** Lee la cantidad de puntos disponibles del personaje (compat multi‐campo) */
+function readAvailablePoints(char: any): { field: string | null; value: number } {
+  for (const f of POINTS_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(char, f)) {
+      const v = Math.max(0, Math.floor(Number(char[f] ?? 0)));
+      return { field: f, value: v };
     }
   }
-  return d;
+  return { field: null, value: 0 };
 }
 
-// Obtiene { name, baseStats } de la clase del personaje (via populate o consulta)
-async function getClassTemplateFromCharacter(doc: any): Promise<{ name: string; baseStats: BaseStats } | null> {
-  const classField = doc?.classId;
-
-  if (classField && typeof classField === "object") {
-    const name = classField.name;
-    const baseStats = coerceBaseStats(classField.baseStats || {});
-    if (name && baseStats) {
-      if (DBG) console.log("[ALLOC] Clase via populate:", { name });
-      return { name, baseStats };
-    }
+/** Setea la nueva cantidad de puntos disponibles (si existe campo compatible) */
+function writeAvailablePoints(char: any, field: string | null, newValue: number) {
+  if (field) {
+    char[field] = Math.max(0, Math.floor(newValue));
   }
-
-  const classId = classField && (classField._id || classField);
-  if (!classId || !Types.ObjectId.isValid(String(classId))) {
-    if (DBG) console.log("[ALLOC] classId inválido/no presente:", classField);
-    return null;
-  }
-
-  const cls = await CharacterClass.findById(classId).select("name baseStats").lean<{ _id: any; name: string; baseStats: any }>().exec();
-
-  if (!cls) return null;
-
-  if (DBG) console.log("[ALLOC] Clase via query:", { name: cls.name });
-  return { name: cls.name, baseStats: coerceBaseStats(cls.baseStats || {}) };
 }
 
-/* ------------------------ controller ------------------------ */
-
-export async function allocatePointsController(req: AuthReq, res: Response) {
+/**
+ * POST /character/allocate
+ * Body ejemplo:
+ * {
+ *   "strength": 2,
+ *   "vitality": 1,
+ *   "luck": 1
+ * }
+ */
+export async function allocatePointsController(req: Request, res: Response) {
   try {
-    const body = (req.body || {}) as AllocateBody;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ message: "No autenticado" });
 
-    // tolerante a allocations o allocate
-    const allocations = (body.allocations ?? body.allocate) as Record<string, number> | undefined;
+    // Normalizamos asignaciones (solo claves válidas, enteros, ≥ 0)
+    const allocations = normalizeAllocations(req.body || {});
+    const spent = Object.values(allocations).reduce((a, b) => a + (b || 0), 0);
 
-    if (!allocations || typeof allocations !== "object") {
-      return res.status(400).json({ message: "allocations requerido (objeto con puntos por stat)" });
+    if (spent <= 0) {
+      return res.status(400).json({ message: "No se enviaron asignaciones válidas" });
     }
 
-    const auth = req.user || {};
-    const candidates = [body.characterId, auth.characterId, auth.character?._id, auth.characterId?._id, auth.id, auth._id, auth.userId].filter(Boolean);
+    const character = await Character.findOne({ userId });
+    if (!character) return res.status(404).json({ message: "Personaje no encontrado" });
 
-    if (candidates.length === 0) {
-      return res.status(400).json({ message: "Falta characterId o autenticación" });
+    // Leemos puntos disponibles (compat con varios nombres de campo)
+    const { field: pointsField, value: available } = readAvailablePoints(character);
+
+    if (available < spent) {
+      return res.status(400).json({
+        message: "Puntos insuficientes",
+        available,
+        requested: spent,
+      });
     }
 
-    let doc: any = null;
-    const first = String(candidates[0]);
-    if (Types.ObjectId.isValid(first)) {
-      doc = await Character.findById(first).populate("classId", "name baseStats").exec();
+    // Aseguramos objeto stats
+    (character as any).stats = (character as any).stats || {};
+
+    // Aplica asignaciones (todo entero)
+    for (const k of Object.keys(allocations) as AllowedStat[]) {
+      const inc = Math.floor(allocations[k] || 0);
+      if (inc <= 0) continue;
+      const prev = Math.floor(Number((character as any).stats[k] ?? 0));
+      (character as any).stats[k] = prev + inc;
     }
 
-    if (!doc) {
-      for (const cand of candidates) {
-        const asStr = String(cand);
-        const query: any = { userId: asStr };
-        if (Types.ObjectId.isValid(asStr)) query.userId = asStr;
-        const tryDoc = await Character.findOne(query).populate("classId", "name baseStats").exec();
-        if (tryDoc) {
-          doc = tryDoc;
-          break;
-        }
-      }
-    }
-
-    if (!doc) return res.status(404).json({ message: "Personaje no encontrado" });
-
-    const cls = await getClassTemplateFromCharacter(doc);
-    if (!cls) {
-      return res.status(400).json({ message: "No se pudo resolver la clase/baseStats del personaje" });
-    }
-
-    const available = computeAvailablePoints(Number(doc.level ?? 1), coerceBaseStats(doc.stats), cls.baseStats);
-    const toSpend = sumAllocations(allocations);
-
-    if (toSpend <= 0) {
-      return res.status(400).json({ message: "Nada para asignar (suma de allocations <= 0)" });
-    }
-    if (toSpend > available) {
-      return res.status(400).json({ message: `Puntos insuficientes. Disponibles: ${available}, intentas gastar: ${toSpend}` });
-    }
-
-    const { applied, deltaStats, deltaCombat } = applyAllocationsToCharacter(
-      doc as any,
-      cls.name as any, // "Guerrero" | "Asesino" | "Mago" | "Arquero"
-      allocations
-    );
-
-    await doc.save();
-
-    const remaining = computeAvailablePoints(Number(doc.level ?? 1), coerceBaseStats(doc.stats), cls.baseStats);
-
-    // ✅ Redondeos SOLO para respuesta (DB ya está guardada)
-    const deltaCombatRounded = roundDeltaCombatForResponse(deltaCombat as any);
-    const combatStatsRoundedForChar = roundCombatStatsForResponse(doc.combatStats || ({} as any));
+    // Descuenta puntos y guarda
+    writeAvailablePoints(character, pointsField, available - spent);
+    await character.save();
 
     return res.json({
-      ok: true,
-      pointsPerLevel: POINTS_PER_LEVEL,
-      spentThis: applied,
-      deltaStats,
-      deltaCombat: deltaCombatRounded, // limpio para UI
-      availableAfter: remaining,
-      character: {
-        id: String(doc._id),
-        level: doc.level,
-        stats: doc.stats,
-        combatStats: combatStatsRoundedForChar, // todos los campos “lindos” y consistentes
-        className: cls.name,
-      },
+      message: "Puntos asignados",
+      spent,
+      pointsLeft: pointsField ? Math.max(0, Math.floor(Number((character as any)[pointsField] ?? 0))) : 0,
+      pointsField: pointsField ?? null, // para que el front sepa cuál es el campo en uso
+      stats: (character as any).stats,
     });
-  } catch (err: any) {
-    console.error("[ALLOC][ERR]", err);
-    return res.status(500).json({ message: "Error asignando puntos" });
+  } catch (err) {
+    console.error("allocatePointsController error:", err);
+    return res.status(500).json({ message: "Error interno" });
   }
 }

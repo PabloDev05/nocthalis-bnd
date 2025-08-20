@@ -2,7 +2,7 @@ import type { RequestHandler } from "express";
 import { Types } from "mongoose";
 import { Match } from "../models/Match";
 import { Character } from "../models/Character";
-import { runPvpWithManager } from "../services/combat/pvpWithManager";
+import { runPvp } from "../battleSystem";
 
 /** Mapea el outcome del runner ("win"|"lose"|"draw") al que guardás en Match ("attacker"|"defender"|"draw") */
 function mapOutcomeForMatch(outcome: "win" | "lose" | "draw") {
@@ -67,7 +67,7 @@ export const simulateCombatPreviewController: RequestHandler = async (req, res) 
     const match = await Match.findById(matchId).lean();
     if (!match) return res.status(404).json({ ok: false, message: "Match no encontrado" });
 
-    const { outcome, timeline, log, snapshots } = runPvpWithManager({
+    const { outcome, timeline, log, snapshots } = runPvp({
       attackerSnapshot: (match as any).attackerSnapshot,
       defenderSnapshot: (match as any).defenderSnapshot,
       seed: (match as any).seed,
@@ -100,7 +100,7 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
     const match = await Match.findById(matchId).lean();
     if (!match) return res.status(404).json({ ok: false, message: "Match no encontrado" });
 
-    const { outcome, timeline, log, snapshots } = runPvpWithManager({
+    const { outcome, timeline, log, snapshots } = runPvp({
       attackerSnapshot: (match as any).attackerSnapshot,
       defenderSnapshot: (match as any).defenderSnapshot,
       seed: (match as any).seed,
@@ -161,7 +161,7 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
     }
 
     // Ejecutar combate
-    const { outcome, timeline, log, snapshots } = runPvpWithManager({
+    const { outcome, timeline, log, snapshots } = runPvp({
       attackerSnapshot: mAny.attackerSnapshot,
       defenderSnapshot: mAny.defenderSnapshot,
       seed: mAny.seed,

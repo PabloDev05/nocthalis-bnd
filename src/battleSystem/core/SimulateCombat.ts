@@ -1,31 +1,25 @@
-// src/services/combat/simulateCombat.ts
-// Simulador de combate por turnos: arma Player/Enemy, inyecta hooks por clase,
-// corre el CombatManager y devuelve log + snapshots (con eventos y estados).
-// Incluye soporte de seed para RNG reproducible.
-// Nota: no usamos MP/mana en ningún cálculo; si existe en el modelo, se ignora.
-
+// src/battleSystem/core/SimulateCombat.ts
 const DBG = process.env.DEBUG_COMBAT === "1";
 
-import { PlayerCharacter } from "../../classes/combat/PlayerCharacter";
-import { EnemyBot } from "../../classes/combat/EnemyBot";
-import { CombatManager } from "../../classes/combat/CombatManager";
-import { mulberry32 } from "../../classes/combat/RngFightSeed";
+import { PlayerCharacter } from "../entities/PlayerCharacter";
+import { EnemyBot } from "../entities/EnemyBot";
+import { CombatManager } from "./CombatManager";
+import { mulberry32 } from "../core/RngFightSeed";
 
-import { applyPassivesToBlocks, collectPassivesForCharacter } from "../../utils/passives";
-import { buildClassPassivePack } from "../../classes/combat/passives/classPacks";
+import { applyPassivesToBlocks, collectPassivesForCharacter } from "../passives/PassiveEffects";
+import { buildClassPassivePack } from "../passives/ClassPacks";
 
-// Fixtures por si querés probar rápido (modo "fixtures")
-import { baseStatsGuerrero, resistenciasGuerrero, combatStatsGuerrero, baseStatsEnemigo, resistenciasEnemigo, combatStatsEnemigo } from "../../classes/combat/Fixtures";
+import { baseStatsGuerrero, resistenciasGuerrero, combatStatsGuerrero, baseStatsEnemigo, resistenciasEnemigo, combatStatsEnemigo } from "../fixtures/Fixtures";
 
 export type SimMode = "fixtures" | "real-preview" | "real";
 
 export interface SimulateParams {
   mode?: SimMode;
-  player?: any; // POJO/lean de Character o instancia PlayerCharacter
-  enemy?: any; // POJO/lean de Enemy o instancia EnemyBot
-  useConsumables?: boolean; // reservado para futuro
-  skills?: string[]; // reservado para futuro
-  seed?: number; // RNG reproducible
+  player?: any;
+  enemy?: any;
+  useConsumables?: boolean;
+  skills?: string[];
+  seed?: number;
 }
 
 export type StatusPublic = { key: string; stacks: number; turnsLeft: number };
@@ -36,11 +30,8 @@ export type CombatSnapshot = {
   damage: number;
   playerHP: number;
   enemyHP: number;
-  events: string[]; // ej: ["player:attack","player:hit","player:crit","enemy:block",...]
-  status?: {
-    player: StatusPublic[];
-    enemy: StatusPublic[];
-  };
+  events: string[]; // p.ej. ["player:attack","player:hit","enemy:block"]
+  // status?: { player: StatusPublic[]; enemy: StatusPublic[] }; // <-- si más adelante expones estado público, lo reactivas
 };
 
 export interface SimulateResult {
@@ -57,11 +48,6 @@ function obj(o: any, fallback: any) {
   return { ...fallback, ...o };
 }
 
-/**
- * Construye PlayerCharacter desde POJO o instancia.
- * - Aplica pasivas planas provenientes de DB (p.ej. "Sombra Letal": +30% CDB).
- * - Setea className en la instancia (lo usan hooks de clase y el motor p/ tipo de daño).
- */
 function ensurePlayer(pcLike: any): { pc: PlayerCharacter; className?: string | null } {
   if (pcLike instanceof PlayerCharacter) {
     const className = (pcLike as any)?.className ?? null;
@@ -77,33 +63,16 @@ function ensurePlayer(pcLike: any): { pc: PlayerCharacter; className?: string | 
   const res = obj(pcLike?.resistances, resistenciasGuerrero);
   const cmbBase = obj(pcLike?.combatStats, combatStatsGuerrero);
 
-  // className si classId viene populado { name }, o si ya trae className
   const className: string | null = pcLike?.classId && typeof pcLike.classId === "object" && "name" in pcLike.classId ? (pcLike.classId as any).name : pcLike?.className ?? null;
 
-  // Pasivas planas desde DB (o fallback por clase)
   const flatPassives = collectPassivesForCharacter(pcLike);
   const { stats, combatStats } = applyPassivesToBlocks(statsBase, cmbBase, flatPassives);
 
-  if (DBG) {
-    console.log("[SIM] ensurePlayer:", {
-      id,
-      name,
-      level,
-      className,
-      flatPassives: flatPassives.map((p) => p.name),
-    });
-  }
-
   const pc = new PlayerCharacter(id, name, level, stats, res, combatStats);
-  (pc as any).className = className; // usado por hooks y por el tipo de daño
-
+  (pc as any).className = className;
   return { pc, className };
 }
 
-/**
- * Construye EnemyBot desde POJO o instancia.
- * Podés setear enemy.className si querés hooks por clase también para enemigos.
- */
 function ensureEnemy(ebLike: any): { eb: EnemyBot; className?: string | null } {
   if (ebLike instanceof EnemyBot) {
     const className = (ebLike as any)?.className ?? null;
@@ -122,8 +91,6 @@ function ensureEnemy(ebLike: any): { eb: EnemyBot; className?: string | null } {
   const eb = new EnemyBot(id, name, level, stats, res, cmb);
   const className: string | null = ebLike?.className ?? null;
   (eb as any).className = className;
-
-  if (DBG) console.log("[SIM] ensureEnemy:", { id, name, level, className });
   return { eb, className };
 }
 
@@ -144,7 +111,6 @@ export async function simulateCombat(params: SimulateParams = {}): Promise<Simul
   let enemyClassName: string | null = null;
 
   if (mode === "fixtures") {
-    // Caso demo: Guerrero vs Rata
     player = new PlayerCharacter("p1", "Jugador Guerrero", 1, baseStatsGuerrero, resistenciasGuerrero, combatStatsGuerrero);
     (player as any).className = "Guerrero";
     enemy = new EnemyBot("e1", "Rata Gigante", 1, baseStatsEnemigo, resistenciasEnemigo, combatStatsEnemigo);
@@ -158,10 +124,9 @@ export async function simulateCombat(params: SimulateParams = {}): Promise<Simul
     enemyClassName = e.className ?? null;
   }
 
-  // 🔌 HOOKS por clase (player y enemigo)
+  // Packs de clase (por ahora NO se inyectan al manager porque el core no los consume aún)
   const pPack = buildClassPassivePack(playerClassName || (player as any).className || null);
   const ePack = buildClassPassivePack(enemyClassName || (enemy as any).className || null);
-
   if (DBG) {
     console.log("[SIM] class hooks:", {
       playerClass: (player as any).className || null,
@@ -171,11 +136,8 @@ export async function simulateCombat(params: SimulateParams = {}): Promise<Simul
     });
   }
 
-  const manager = new CombatManager(player, enemy, {
-    rng,
-    playerHooks: pPack.hooks ?? null,
-    enemyHooks: ePack.hooks ?? null, // si no querés hooks del enemigo, poné null
-  });
+  // ⚠️ Manager core actual NO acepta playerHooks/enemyHooks en options
+  const manager = new CombatManager(player, enemy, { rng });
 
   let round = 1;
 
@@ -186,51 +148,51 @@ export async function simulateCombat(params: SimulateParams = {}): Promise<Simul
   while (!manager.isCombatOver() && round <= 200) {
     if (DBG) console.log("[SIM] >>> Ronda", round);
 
-    // Inicio de ronda: hooks + expiración de estados
-    const roundEvents: string[] = [];
-    manager.startRound(round, (ev) => roundEvents.push(ev));
-    if (roundEvents.length && DBG) console.log("[SIM] Eventos de inicio de ronda:", roundEvents);
-
+    manager.startRound(round, () => {}); // mantenemos la señal de inicio si el core la usa
     log.push(`🔄 Ronda ${round}`);
 
-    // Turno del jugador
+    // --- Turno del jugador
     const outP = manager.playerAttack();
+    const pEvents: string[] = ["player:attack"];
+    if (outP.flags.miss) pEvents.push("player:miss");
+    else {
+      if (outP.flags.crit) pEvents.push("player:crit");
+      if (outP.flags.blocked) pEvents.push("enemy:block");
+      pEvents.push("player:hit", "player:hit:physical");
+    }
     log.push(`🗡️ ${player.name} ataca e inflige ${outP.damage} de daño.`);
     log.push(`💔 ${enemy.name} HP restante: ${Math.max(0, enemy.currentHP)}`);
-    const st1 = manager.getStatusPublicState();
     snapshots.push({
       round,
       actor: "player",
       damage: outP.damage,
       playerHP: Math.max(0, player.currentHP),
       enemyHP: Math.max(0, enemy.currentHP),
-      events: [
-        ...roundEvents, // eventos de inicio de ronda (buffs/estados)
-        ...(outP.flags.miss ? ["player:miss"] : []),
-        ...(outP.flags.crit ? ["player:crit"] : []),
-        ...(outP.flags.blocked ? ["enemy:block"] : []),
-        ...outP.events, // eventos del CM (attack, hit, weapon, etc.)
-      ],
-      status: st1,
+      events: pEvents,
+      // status: undefined,
     });
-    if (DBG) console.log("[SIM] Snapshot jugador:", snapshots[snapshots.length - 1]);
     if (manager.isCombatOver()) break;
 
-    // Turno del enemigo
+    // --- Turno del enemigo
     const outE = manager.enemyAttack();
+    const eEvents: string[] = ["enemy:attack"];
+    if (outE.flags.miss) eEvents.push("enemy:miss");
+    else {
+      if (outE.flags.crit) eEvents.push("enemy:crit");
+      if (outE.flags.blocked) eEvents.push("player:block");
+      eEvents.push("enemy:hit", "enemy:hit:physical");
+    }
     log.push(`⚡ ${enemy.name} ataca e inflige ${outE.damage} de daño.`);
     log.push(`💔 ${player.name} HP restante: ${Math.max(0, player.currentHP)}`);
-    const st2 = manager.getStatusPublicState();
     snapshots.push({
       round,
       actor: "enemy",
       damage: outE.damage,
       playerHP: Math.max(0, player.currentHP),
       enemyHP: Math.max(0, enemy.currentHP),
-      events: [...(outE.flags.miss ? ["enemy:miss"] : []), ...(outE.flags.crit ? ["enemy:crit"] : []), ...(outE.flags.blocked ? ["player:block"] : []), ...outE.events],
-      status: st2,
+      events: eEvents,
+      // status: undefined,
     });
-    if (DBG) console.log("[SIM] Snapshot enemigo:", snapshots[snapshots.length - 1]);
 
     round++;
   }

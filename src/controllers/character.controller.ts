@@ -78,9 +78,7 @@ function coerceBaseStats(src: any): BaseStats {
     physicalDefense: Number(src?.physicalDefense ?? 0),
     magicalDefense: Number(src?.magicalDefense ?? 0),
     luck: Number(src?.luck ?? 0),
-    agility: Number(src?.agility ?? 0),
     endurance: Number(src?.endurance ?? 0),
-    wisdom: Number(src?.wisdom ?? 0),
   };
 }
 

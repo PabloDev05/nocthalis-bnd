@@ -1,9 +1,7 @@
+// src/interfaces/character/Character.interface.ts
 import { BaseStats, Resistances, CombatStats } from "./CharacterClass.interface";
 
-/**
- * NOTA: renombrado a `Equipment` para evitar colisión con el `EquipmentSlot`
- * (union de strings) exportado por el modelo Mongoose.
- */
+/** Estructura de equipo: ids (string) o null para cada slot */
 export interface Equipment {
   helmet: string | null;
   chest: string | null;
@@ -24,19 +22,26 @@ export interface Character {
   /** puede no existir aún */
   subclassId?: string | null;
 
+  /** Progresión */
   level: number;
   experience: number;
 
-  /** Fuente de verdad en el personaje */
+  /** Fuente de verdad del personaje */
   stats: BaseStats;
   resistances: Resistances;
+
+  /** Si en DB siempre existe, podés quitar el '?' */
   combatStats?: CombatStats;
 
+  /** Vida actual para UI fuera de combate (opcional) */
+  currentHP?: number;
+
+  /** Progresión/colección */
   passivesUnlocked: string[];
   inventory: string[];
   equipment: Equipment;
 
-  /** timestamps del doc */
-  createdAt: Date;
-  updatedAt: Date;
+  /** timestamps del doc (opcionales en DTOs/lean) */
+  createdAt?: Date;
+  updatedAt?: Date;
 }

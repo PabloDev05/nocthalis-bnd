@@ -4,8 +4,21 @@ export const seedCharacterClasses = [
     description: "Un guerrero cuya ira resuena como acero en la niebla. Guardián del reino caído.",
     iconName: "Shield",
     imageMainClassUrl: "/assets/classes/guerrero/guerrero_class_1.png",
-    passiveDefault: { name: "Espíritu de Guardia", description: "Reduce el daño recibido mientras el escudo está activo." },
-    baseStats: { strength: 12, dexterity: 5, intelligence: 2, vitality: 10, physicalDefense: 9, magicalDefense: 3, luck: 2, agility: 4, endurance: 8, wisdom: 2 },
+    // ⇩ coincide con el motor: +5% DR y +3% Block
+    passiveDefault: {
+      name: "Espíritu de Guardia",
+      description: "+5% reducción de daño y +3% probabilidad de bloqueo de forma constante.",
+    },
+    baseStats: {
+      strength: 12,
+      dexterity: 5,
+      intelligence: 2,
+      vitality: 10,
+      physicalDefense: 9,
+      magicalDefense: 3,
+      luck: 2,
+      endurance: 8,
+    },
     resistances: {
       fire: 4,
       ice: 4,
@@ -26,7 +39,6 @@ export const seedCharacterClasses = [
     },
     combatStats: {
       maxHP: 150,
-      maxMP: 40,
       attackPower: 25,
       magicPower: 5,
       criticalChance: 5,
@@ -36,7 +48,6 @@ export const seedCharacterClasses = [
       blockChance: 15,
       blockValue: 20,
       lifeSteal: 2,
-      manaSteal: 0,
       damageReduction: 10,
       movementSpeed: 4,
     },
@@ -63,13 +74,27 @@ export const seedCharacterClasses = [
       },
     ],
   },
+
   {
     name: "Mago",
     description: "Un sabio anciano que canaliza el fuego ancestral y la escarcha del abismo.",
     iconName: "Flame",
     imageMainClassUrl: "/assets/classes/mago/mago_class_1.png",
-    passiveDefault: { name: "Llama Interna", description: "Aumenta el daño elemental con el tiempo." },
-    baseStats: { strength: 2, dexterity: 4, intelligence: 12, vitality: 6, physicalDefense: 3, magicalDefense: 9, luck: 3, agility: 4, endurance: 5, wisdom: 10 },
+    // ⇩ coincide con el motor: +30% MP → daño base + ramping +2%/ataque (máx +10%)
+    passiveDefault: {
+      name: "Llama Interna",
+      description: "Convierte el 30% del Poder Mágico en daño base y aumenta el daño +2% por ataque (máx +10%).",
+    },
+    baseStats: {
+      strength: 2,
+      dexterity: 4,
+      intelligence: 12,
+      vitality: 6,
+      physicalDefense: 3,
+      magicalDefense: 9,
+      luck: 3,
+      endurance: 5,
+    },
     resistances: {
       fire: 6,
       ice: 6,
@@ -90,7 +115,6 @@ export const seedCharacterClasses = [
     },
     combatStats: {
       maxHP: 80,
-      maxMP: 120,
       attackPower: 5,
       magicPower: 30,
       criticalChance: 8,
@@ -100,7 +124,6 @@ export const seedCharacterClasses = [
       blockChance: 2,
       blockValue: 5,
       lifeSteal: 0,
-      manaSteal: 3,
       damageReduction: 3,
       movementSpeed: 4,
     },
@@ -127,13 +150,27 @@ export const seedCharacterClasses = [
       },
     ],
   },
+
   {
     name: "Asesino",
     description: "Sombra sigilosa entre ruinas olvidadas. Su hoja envenenada susurra muerte.",
     iconName: "Ghost",
     imageMainClassUrl: "/assets/classes/asesino/asesino_class_1.png",
-    passiveDefault: { name: "Sombra Letal", description: "+30% daño crítico." },
-    baseStats: { strength: 6, dexterity: 10, intelligence: 4, vitality: 6, physicalDefense: 4, magicalDefense: 4, luck: 8, agility: 9, endurance: 5, wisdom: 3 },
+    // ⇩ coincide con el motor: +30% al bono de crítico (no a la chance)
+    passiveDefault: {
+      name: "Sombra Letal",
+      description: "+30% al bono de daño crítico.",
+    },
+    baseStats: {
+      strength: 6,
+      dexterity: 10,
+      intelligence: 4,
+      vitality: 6,
+      physicalDefense: 4,
+      magicalDefense: 4,
+      luck: 8,
+      endurance: 5,
+    },
     resistances: {
       fire: 3,
       ice: 4,
@@ -154,7 +191,6 @@ export const seedCharacterClasses = [
     },
     combatStats: {
       maxHP: 100,
-      maxMP: 50,
       attackPower: 20,
       magicPower: 10,
       criticalChance: 15,
@@ -164,7 +200,6 @@ export const seedCharacterClasses = [
       blockChance: 5,
       blockValue: 5,
       lifeSteal: 4,
-      manaSteal: 0,
       damageReduction: 5,
       movementSpeed: 6,
     },
@@ -191,13 +226,27 @@ export const seedCharacterClasses = [
       },
     ],
   },
+
   {
     name: "Arquero",
     description: "Cazador de la penumbra. Su arco canta desde los árboles muertos.",
     iconName: "GiBowArrow",
     imageMainClassUrl: "/assets/classes/arquero/arquero_class_1.png",
-    passiveDefault: { name: "Ojo del Águila", description: "Aumenta el daño con el tiempo." },
-    baseStats: { strength: 7, dexterity: 9, intelligence: 4, vitality: 6, physicalDefense: 5, magicalDefense: 4, luck: 6, agility: 8, endurance: 6, wisdom: 4 },
+    // ⇩ coincide con el motor: ramping +1.5%/ataque (máx +7.5%)
+    passiveDefault: {
+      name: "Ojo del Águila",
+      description: "Aumenta el daño +1.5% por ataque consecutivo (máx +7.5%).",
+    },
+    baseStats: {
+      strength: 7,
+      dexterity: 9,
+      intelligence: 4,
+      vitality: 6,
+      physicalDefense: 5,
+      magicalDefense: 4,
+      luck: 6,
+      endurance: 6,
+    },
     resistances: {
       fire: 4,
       ice: 3,
@@ -218,7 +267,6 @@ export const seedCharacterClasses = [
     },
     combatStats: {
       maxHP: 110,
-      maxMP: 60,
       attackPower: 22,
       magicPower: 5,
       criticalChance: 12,
@@ -228,7 +276,6 @@ export const seedCharacterClasses = [
       blockChance: 3,
       blockValue: 4,
       lifeSteal: 3,
-      manaSteal: 0,
       damageReduction: 4,
       movementSpeed: 6,
     },

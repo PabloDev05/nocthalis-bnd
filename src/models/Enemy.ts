@@ -139,9 +139,7 @@ const EnemySchema = new Schema<EnemyDoc>(
       physicalDefense: { type: Number, default: 0 },
       magicalDefense: { type: Number, default: 0 },
       luck: { type: Number, default: 0 },
-      agility: { type: Number, default: 0 },
       endurance: { type: Number, default: 0 },
-      wisdom: { type: Number, default: 0 },
     },
 
     // Resistencias con defaults
@@ -167,7 +165,6 @@ const EnemySchema = new Schema<EnemyDoc>(
     // CombatStats con defaults
     combatStats: {
       maxHP: { type: Number, default: 0 },
-      maxMP: { type: Number, default: 0 },
       attackPower: { type: Number, default: 0 },
       magicPower: { type: Number, default: 0 },
       criticalChance: { type: Number, default: 0 },
@@ -177,7 +174,6 @@ const EnemySchema = new Schema<EnemyDoc>(
       blockChance: { type: Number, default: 0 },
       blockValue: { type: Number, default: 0 },
       lifeSteal: { type: Number, default: 0 },
-      manaSteal: { type: Number, default: 0 },
       damageReduction: { type: Number, default: 0 },
       movementSpeed: { type: Number, default: 0 },
     },

@@ -2,6 +2,7 @@
 import { Types } from "mongoose";
 import { CharacterClass } from "../models/CharacterClass";
 
+/** Estructura de una subclase embebida en CharacterClass */
 export type SubclassLean = {
   _id: Types.ObjectId;
   name: string;
@@ -22,27 +23,43 @@ export type SubclassLean = {
   }>;
 };
 
-/**
- * Devuelve la subclase embebida si existe dentro de la clase.
- */
-export async function getSubclassById(classId: string, subclassId: string) {
-  const cls = await CharacterClass.findById(classId).lean<{
-    _id: Types.ObjectId;
-    name: string;
-    subclasses?: SubclassLean[];
-  }>();
-  if (!cls?.subclasses?.length) return null;
+/** Resumen minimal para UI */
+export type SubclassSummary = {
+  id: string;
+  name: string;
+  iconName: string;
+  imageSubclassUrl: string;
+  slug: string | null;
+};
 
-  const sub = cls.subclasses.find((s) => String(s._id) === String(subclassId));
-  return sub ?? null;
+/**
+ * Devuelve SOLO la subclase pedida (si existe) usando $elemMatch.
+ * - Si los IDs no son válidos, retorna null (evita querys innecesarias).
+ * - No trae toda la clase, solo la subclase que matchea → más eficiente.
+ */
+export async function getSubclassById(classId: string, subclassId: string): Promise<SubclassLean | null> {
+  // chicos: validamos IDs antes de pegarle a la DB
+  if (!Types.ObjectId.isValid(classId) || !Types.ObjectId.isValid(subclassId)) {
+    return null;
+  }
+  const cId = new Types.ObjectId(classId);
+  const sId = new Types.ObjectId(subclassId);
+
+  // chicos: $elemMatch para traer una sola subclase
+  const doc = await CharacterClass.findOne({ _id: cId, "subclasses._id": sId }, { subclasses: { $elemMatch: { _id: sId } } })
+    .lean<{ _id: Types.ObjectId; subclasses?: SubclassLean[] }>()
+    .exec();
+
+  return doc?.subclasses?.[0] ?? null;
 }
 
 /**
- * Un resumen listo para UI (opcional).
+ * Devuelve un resumen listo para UI.
  */
-export async function getSubclassSummary(classId: string, subclassId: string) {
+export async function getSubclassSummary(classId: string, subclassId: string): Promise<SubclassSummary | null> {
   const sub = await getSubclassById(classId, subclassId);
   if (!sub) return null;
+
   return {
     id: String(sub._id),
     name: sub.name,

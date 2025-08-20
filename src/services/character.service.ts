@@ -1,4 +1,3 @@
-// src/services/character.service.ts
 const DBG = process.env.DEBUG_COMBAT === "1";
 
 import { Types } from "mongoose";

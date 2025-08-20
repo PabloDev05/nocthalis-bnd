@@ -1,12 +1,12 @@
+// src/services/allocation.service.ts
 // Lógica de asignación de puntos
-// - Solo "agility" (dexterity mapeada a agility aquí)
-// - Soft-caps reales y luego cap duro
+// ✅ Soft-caps reales y luego cap duro.
 
 const DBG = process.env.DEBUG_ALLOCATION === "1";
 
 import type { Document } from "mongoose";
 import type { BaseStats, CombatStats } from "../interfaces/character/CharacterClass.interface";
-import { CLASS_COEFFS, POINTS_PER_LEVEL, STAT_CAPS, SOFTCAP_K, type ClassKey, type BaseKey } from "../constants/allocateCoeffs";
+import { CLASS_COEFFS, POINTS_PER_LEVEL, STAT_CAPS, SOFTCAP_K, type ClassKey, type BaseKey } from "../battleSystem/constants/allocateCoeffs";
 
 function safeNum(n: any, d = 0) {
   const v = Number(n);
@@ -22,19 +22,7 @@ function softCap(raw: number, CAP: number, K: number) {
   return Math.min(curved, CAP);
 }
 
-// Mapeo: dexterity → agility
-function normalizeKey(k: string): BaseKey | null {
-  const map: Record<string, BaseKey> = {
-    strength: "strength",
-    agility: "agility",
-    dexterity: "agility", // ← alias directo
-    intelligence: "intelligence",
-    vitality: "vitality",
-    endurance: "endurance",
-    luck: "luck",
-  };
-  return (map[k] ?? null) as BaseKey | null;
-}
+const ALLOWED_KEYS: BaseKey[] = ["strength", "dexterity", "intelligence", "vitality", "endurance", "luck"];
 
 export function sumAllocations(alloc: Record<string, number>): number {
   return Object.values(alloc || {}).reduce((a, b) => a + (safeNum(b, 0) | 0), 0);
@@ -42,12 +30,10 @@ export function sumAllocations(alloc: Record<string, number>): number {
 
 export function computeSpentPoints(current: BaseStats, classBase: BaseStats): number {
   let spent = 0;
-  for (const key of Object.keys(classBase) as (keyof BaseStats)[]) {
-    if (["strength", "dexterity", "intelligence", "vitality", "agility", "endurance", "luck"].includes(key)) {
-      const cur = safeNum((current as any)[key], 0);
-      const base = safeNum((classBase as any)[key], 0);
-      spent += Math.max(0, Math.floor(cur - base));
-    }
+  for (const key of ALLOWED_KEYS) {
+    const cur = safeNum((current as any)[key], 0);
+    const base = safeNum((classBase as any)[key], 0);
+    spent += Math.max(0, Math.floor(cur - base));
   }
   return spent;
 }
@@ -88,12 +74,14 @@ function buildDeltasFor(className: ClassKey, alloc: Record<BaseKey, number>) {
 }
 
 export function applyAllocationsToCharacter(doc: Document & { stats: BaseStats; combatStats: CombatStats; classId?: any }, className: ClassKey, alloc: Record<string, number>) {
+  // 🧹 Filtramos solo claves permitidas; sin alias ni mapeos.
   const clean: Record<BaseKey, number> = {} as any;
   for (const [k, v] of Object.entries(alloc || {})) {
-    const nk = normalizeKey(k);
+    if (!ALLOWED_KEYS.includes(k as BaseKey)) continue;
     const iv = safeNum(v, 0) | 0;
-    if (!nk || iv <= 0) continue;
-    clean[nk] = (clean[nk] || 0) + iv;
+    if (iv <= 0) continue;
+    const key = k as BaseKey;
+    clean[key] = (clean[key] || 0) + iv;
   }
 
   if (Object.keys(clean).length === 0) {
@@ -103,22 +91,25 @@ export function applyAllocationsToCharacter(doc: Document & { stats: BaseStats; 
 
   const { deltaStats, deltaCombat } = buildDeltasFor(className, clean);
 
+  // 1) Subir puntos en BaseStats
   for (const [k, v] of Object.entries(clean)) {
     const cur = safeNum((doc.stats as any)[k], 0);
     (doc.stats as any)[k] = cur + (v as number);
   }
 
+  // 2) Aplicar incrementos secundarios a BaseStats
   for (const [k, inc] of Object.entries(deltaStats)) {
     const cur = safeNum((doc.stats as any)[k], 0);
     (doc.stats as any)[k] = cur + safeNum(inc, 0);
   }
 
+  // 3) Aplicar incrementos a CombatStats
   for (const [k, inc] of Object.entries(deltaCombat)) {
     const cur = safeNum((doc.combatStats as any)[k], 0);
     (doc.combatStats as any)[k] = cur + safeNum(inc, 0);
   }
 
-  // Soft-cap → cap duro
+  // 4) Soft-cap → cap duro
   if (doc.combatStats) {
     if (typeof doc.combatStats.criticalChance === "number") {
       const curved = softCap(doc.combatStats.criticalChance, STAT_CAPS.criticalChance, SOFTCAP_K.criticalChance);

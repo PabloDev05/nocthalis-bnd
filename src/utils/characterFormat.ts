@@ -16,7 +16,6 @@ export function roundCombatStatsForResponse(cs: CombatStats): CombatStats {
 
   // Enteros (se ven mejor así)
   c.maxHP = Math.round(c.maxHP ?? 0);
-  c.maxMP = Math.round(c.maxMP ?? 0); // aunque hoy no uses MP, dejamos consistente
   c.blockChance = Math.round(c.blockChance ?? 0);
   c.lifeSteal = Math.round(c.lifeSteal ?? 0);
   c.manaSteal = Math.round(c.manaSteal ?? 0);

@@ -1,6 +1,6 @@
 import "dotenv/config";
 import mongoose from "mongoose";
-import { buildPlayerCharacter, buildEnemyById } from "../services/combat/builders";
+import { buildPlayerCharacter, buildEnemyById } from "../battleSystem/core/Builders";
 
 const MONGO = process.env.MONGO_URI || process.env.DATABASE_URL;
 if (!MONGO) throw new Error("MONGO_URI / DATABASE_URL no definido en .env");

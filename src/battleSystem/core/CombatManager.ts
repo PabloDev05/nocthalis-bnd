@@ -1,3 +1,6 @@
+// src/battleSystem/core/CombatManager.ts
+import type { WeaponData } from "./Weapon";
+
 export interface ManagerOpts {
   rng?: () => number; // PRNG [0,1)
   seed?: number; // si no hay rng, genera uno determinístico
@@ -31,14 +34,18 @@ function makeSeededRng(seed: number): () => number {
 
 export type SideKey = "player" | "enemy";
 
+/** Entidad mínima para el manager de combate */
 export interface CombatSide {
   name: string;
   className?: string;
+
   maxHP: number;
   currentHP: number;
+
   stats?: Record<string, number>;
   resistances?: Record<string, number>;
   equipment?: Record<string, unknown>;
+
   combat: {
     attackPower: number;
     magicPower: number;
@@ -50,6 +57,10 @@ export interface CombatSide {
     attackSpeed: number;
     maxHP?: number;
   };
+
+  // Armas (solo nos interesan minDamage / maxDamage)
+  weaponMain?: WeaponData;
+  weaponOff?: WeaponData | null;
 }
 
 export interface AttackFlags {
@@ -60,31 +71,32 @@ export interface AttackFlags {
 export interface AttackOutput {
   damage: number;
   flags: AttackFlags;
+  extra?: { offhandUsed?: boolean };
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
-// Pasivas por clase (suaves, editables)
+// Ajustes de “pasivas suaves” por clase (si no querés usarlas, ponelos en 0)
 // ───────────────────────────────────────────────────────────────────────────────
 const PassiveTweaks = {
   offensiveStatic: (cls?: string) => {
     const c = (cls || "").toLowerCase();
     return {
-      // Mago convierte parte de magicPower a daño base
+      // Mago convierte parte del magicPower a daño base simple
       magicToDamage: c.includes("mago") ? 0.3 : 0,
-      // Asesino: +30% al bono de crítico del atacante
+      // Asesino: +30% al bonus de crítico
       critBonusAdd: c.includes("asesino") ? 0.3 : 0,
-      // Dejo critChanceAdd en 0 para todos (si quisieras, edítalo aquí)
+      // Chance extra de crítico (dejado en 0)
       critChanceAdd: 0,
+      // Multiplicador ofensivo genérico
       damageMult: 1.0,
     };
   },
   defensiveStatic: (cls?: string) => {
     const c = (cls || "").toLowerCase();
     return {
-      // Guerrero: más tanque
+      // Guerrero más tanque
       damageReductionAdd: c.includes("guerrero") ? 0.05 : 0,
       blockAdd: c.includes("guerrero") ? 0.03 : 0,
-      // No doy evasión extra; ya está en los stats base del Asesino/Arquero
     };
   },
 };
@@ -149,6 +161,16 @@ export class CombatManager {
     return null;
   }
 
+  /** Tira un entero uniforme entre [minDamage, maxDamage] del arma (si existe) */
+  private rollWeapon(w?: WeaponData | null): number {
+    if (!w) return 0;
+    const lo = Math.max(0, Math.floor((w as any).minDamage || 0));
+    const hi = Math.max(lo, Math.floor((w as any).maxDamage || 0));
+    if (hi <= lo) return lo;
+    const r = this.rng();
+    return Math.floor(lo + r * (hi - lo + 1)); // entero
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
   // Resolución de un golpe
   // ───────────────────────────────────────────────────────────────────────────
@@ -179,49 +201,47 @@ export class CombatManager {
     const critChance = clamp01(num(A.combat.criticalChance, 0.05) + off.critChanceAdd);
     const isCrit = this.rng() < critChance;
 
-    // Daño base (AP + % de MP si es mago)
-    let dmg = Math.max(0, num(A.combat.attackPower, 0));
+    // ----- Daño base por armas -----
+    const mainRoll = this.rollWeapon(A.weaponMain);
+
+    // offhand (si existe): aporta un 60% de su propia tirada (entero)
+    let offhandUsed = false;
+    let offRollPart = 0;
+    if (A.weaponOff) {
+      const r = this.rollWeapon(A.weaponOff);
+      offRollPart = Math.floor((r * 60) / 100);
+      if (offRollPart > 0) offhandUsed = true;
+    }
+
+    // AP + (parte de MP si "mago")
+    let dmg = 0;
+    dmg += mainRoll;
+    dmg += offRollPart;
+    dmg += Math.max(0, Math.floor(num(A.combat.attackPower, 0)));
     if (off.magicToDamage > 0) {
-      dmg += off.magicToDamage * Math.max(0, num(A.combat.magicPower, 0));
+      const mp = Math.max(0, Math.floor(num(A.combat.magicPower, 0)));
+      dmg += Math.floor(mp * off.magicToDamage); // se trunca
     }
 
     // Variación ±jitter
     const j = clamp01(num(this.opts.damageJitter, 0.15));
-    const jitter = 1 - j + this.rng() * (2 * j); // [1-j, 1+j]
-    dmg *= jitter;
+    const jitter = 1 - j + this.rng() * (2 * j);
+    dmg = Math.floor(dmg * jitter);
 
     // Crítico
     if (isCrit) {
       const baseCrit = Math.max(0, num(A.combat.criticalDamageBonus, this.opts.critMultiplierBase));
-      dmg *= 1 + baseCrit + off.critBonusAdd; // Asesino +30% aquí
+      dmg = Math.floor(dmg * (1 + baseCrit + off.critBonusAdd));
     }
 
     // Mitigación por bloqueo
     if (blocked) {
-      dmg *= 1 - this.opts.blockReduction;
+      dmg = Math.floor(dmg * (1 - this.opts.blockReduction));
     }
 
-    // Reducción de daño del defensor (Guerrero +5% adicional)
+    // Reducción de daño del defensor
     let dr = clamp01(num(D.combat.damageReduction, 0) + def.damageReductionAdd);
-    dmg *= 1 - dr;
-
-    // ── RAMPING por clase del atacante ────────────────────────────────────────
-    const cls = (A.className || "").toLowerCase();
-    let rampMult = 1;
-    if (cls.includes("mago")) {
-      this.ramp[attackerKey].mage++;
-      const bonus = Math.min(0.1, 0.02 * this.ramp[attackerKey].mage); // +2% por ataque, máx +10%
-      rampMult *= 1 + bonus;
-    }
-    if (cls.includes("arquero")) {
-      this.ramp[attackerKey].archer++;
-      const bonus = Math.min(0.075, 0.015 * this.ramp[attackerKey].archer); // +1.5% por ataque, máx +7.5%
-      rampMult *= 1 + bonus;
-    }
-    dmg *= rampMult;
-
-    // Multiplicador ofensivo estático (si definís alguno)
-    dmg *= off.damageMult;
+    dmg = Math.floor(dmg * (1 - dr));
 
     const finalDmg = Math.max(0, Math.floor(dmg));
     D.currentHP = Math.max(0, D.currentHP - finalDmg);
@@ -230,6 +250,6 @@ export class CombatManager {
       console.log("[MAN] blocked=", blocked, "crit=", isCrit, "finalDmg=", finalDmg, "D.hp=", D.currentHP);
       this.dbgCount++;
     }
-    return { damage: finalDmg, flags: { miss: false, blocked, crit: isCrit } };
+    return { damage: finalDmg, flags: { miss: false, blocked, crit: isCrit }, extra: { offhandUsed } };
   }
 }

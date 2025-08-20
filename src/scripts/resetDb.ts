@@ -6,9 +6,9 @@ import { Character } from "../models/Character";
 import { CharacterClass } from "../models/CharacterClass";
 import { Enemy } from "../models/Enemy";
 import { Item } from "../models/Item";
-import { seedCharacterClasses } from "./seedCharacterClasses"; // array de clases
-import { buildSeedEnemies } from "./generateEnemies"; // función que retorna POJOs
-import { insertSeedItems } from "./seedItems"; // función que inserta y retorna docs
+import { seedCharacterClasses } from "./seedCharacterClasses";
+import { buildSeedEnemies } from "./generateEnemies";
+import { insertSeedItems } from "./seedItems";
 
 (async () => {
   let exitCode = 0;
@@ -22,7 +22,7 @@ import { insertSeedItems } from "./seedItems"; // función que inserta y retorna
 
     await connectDB();
 
-    // 1) Limpiar colecciones (ignoramos errores si alguna no existe)
+    // 1) Limpiar colecciones
     await Promise.all([
       User.deleteMany({}).catch(() => null),
       Character.deleteMany({}).catch(() => null),
@@ -32,33 +32,28 @@ import { insertSeedItems } from "./seedItems"; // función que inserta y retorna
     ]);
     console.log("🧹 Limpio users, characters, classes, enemies, items");
 
-    // 2) Sincronizar índices según los Schemas
+    // 2) Sincronizar índices
     await Promise.allSettled([User.syncIndexes(), Character.syncIndexes(), CharacterClass.syncIndexes(), Enemy.syncIndexes(), Item.syncIndexes()]);
     console.log("🧩 Índices sincronizados con los Schemas");
 
-    // 3) Insertar seeds de clases e ítems
+    // 3) Seeds de clases e ítems
     const [classesInserted, itemsInserted] = await Promise.all([
       CharacterClass.insertMany(seedCharacterClasses, { ordered: true }),
-      insertSeedItems(), // debe retornar array de docs insertados
+      insertSeedItems(), // asegúrate que setee 'slug' si tu schema lo exige
     ]);
 
-    // 4) Generar e insertar enemigos
+    // 4) Enemigos
     const enemies = buildSeedEnemies();
-    if (!enemies.length) throw new Error("El generador de enemigos devolvió 0 resultados.");
-
+    if (!Array.isArray(enemies) || enemies.length === 0) {
+      throw new Error("El generador de enemigos devolvió 0 resultados.");
+    }
     const enemiesInserted = await Enemy.insertMany(enemies, { ordered: true });
 
-    // 5) Log de resultados + IDs útiles para pruebas
+    // 5) Logs
     console.log(`🌱 Clases: ${classesInserted.length} | Items: ${itemsInserted.length} | Enemigos: ${enemiesInserted.length}`);
-    if (classesInserted[0]) {
-      console.log("📌 Ejemplo ClassId:", String(classesInserted[0]._id));
-    }
-    if (itemsInserted[0]) {
-      console.log("📌 Ejemplo ItemId :", String(itemsInserted[0]._id));
-    }
-    if (enemiesInserted[0]) {
-      console.log("📌 Ejemplo EnemyId:", String(enemiesInserted[0]._id));
-    }
+    if (classesInserted[0]) console.log("📌 Ejemplo ClassId:", String(classesInserted[0]._id));
+    if (itemsInserted[0]) console.log("📌 Ejemplo ItemId :", String(itemsInserted[0]._id));
+    if (enemiesInserted[0]) console.log("📌 Ejemplo EnemyId:", String(enemiesInserted[0]._id));
 
     console.log("✅ Reset DB OK");
   } catch (err) {
@@ -67,9 +62,7 @@ import { insertSeedItems } from "./seedItems"; // función que inserta y retorna
   } finally {
     try {
       await disconnectDB();
-    } catch {
-      /* ignore */
-    }
+    } catch {}
     process.exit(exitCode);
   }
 })();

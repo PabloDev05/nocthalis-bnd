@@ -1,17 +1,13 @@
-// src/controllers/combatResult.controller.ts
-// Listado y detalle de historiales de combate
 const DBG = process.env.DEBUG_COMBAT === "1";
 
 import { Request, Response } from "express";
 import { Types } from "mongoose";
 import { CombatResult } from "../models/CombatResult";
-import type { AuthReq } from "../middleware/requireAuth";
 
 type ModeFilter = "preview" | "resolve" | "pvp-preview" | "pvp-resolve";
-
 type WinnerFilter = "player" | "enemy" | "none";
 
-export async function getCombatResultsController(req: AuthReq, res: Response) {
+export async function getCombatResultsController(req: Request, res: Response) {
   try {
     const { page = "1", limit = "20", mode, enemyId, characterId, winner } = req.query as Record<string, string>;
 
@@ -31,18 +27,16 @@ export async function getCombatResultsController(req: AuthReq, res: Response) {
       delete filter.userId;
     }
 
-    // PvE puede tener enemyId; en PvP suele ser null. Solo filtrar si lo mandan y es válido.
+    // PvE puede tener enemyId; solo filtrar si lo mandan válido.
     if (enemyId && Types.ObjectId.isValid(enemyId)) {
       filter.enemyId = new Types.ObjectId(enemyId);
     }
 
-    // Modo: ahora incluye PvP
     const allowedModes: ModeFilter[] = ["preview", "resolve", "pvp-preview", "pvp-resolve"];
     if (mode && (allowedModes as string[]).includes(mode)) {
       filter.mode = mode;
     }
 
-    // Winner: ahora acepta 'none' (empate PvP)
     const allowedWinners: WinnerFilter[] = ["player", "enemy", "none"];
     if (winner && (allowedWinners as string[]).includes(winner)) {
       filter.winner = winner;
@@ -66,7 +60,6 @@ export async function getCombatResultsController(req: AuthReq, res: Response) {
           turns: 1,
           seed: 1,
           createdAt: 1,
-          // no cargamos arrays grandes en el listado
           snapshots: { $slice: 0 },
           log: { $slice: 0 },
           rewards: 1,
@@ -82,7 +75,7 @@ export async function getCombatResultsController(req: AuthReq, res: Response) {
   }
 }
 
-export async function getCombatResultDetailController(req: AuthReq, res: Response) {
+export async function getCombatResultDetailController(req: Request, res: Response) {
   try {
     const { id } = req.params as { id: string };
     if (!id || !Types.ObjectId.isValid(id)) {

@@ -9,9 +9,7 @@ export const baseStatsGuerrero: BaseStats = {
   physicalDefense: 9,
   magicalDefense: 3,
   luck: 2,
-  agility: 4,
   endurance: 8,
-  wisdom: 2,
 };
 
 export const resistenciasGuerrero: Resistances = {
@@ -36,7 +34,6 @@ export const resistenciasGuerrero: Resistances = {
 // Stats de combate para Guerrero
 export const combatStatsGuerrero: CombatStats = {
   maxHP: 150,
-  maxMP: 40,
   attackPower: 25,
   magicPower: 5,
   criticalChance: 5,
@@ -46,7 +43,6 @@ export const combatStatsGuerrero: CombatStats = {
   blockChance: 15,
   blockValue: 20,
   lifeSteal: 2,
-  manaSteal: 0,
   damageReduction: 10,
   movementSpeed: 4,
 };
@@ -60,9 +56,7 @@ export const baseStatsEnemigo: BaseStats = {
   physicalDefense: 3,
   magicalDefense: 2,
   luck: 1,
-  agility: 3,
   endurance: 4,
-  wisdom: 1,
 };
 
 export const resistenciasEnemigo: Resistances = {
@@ -86,7 +80,6 @@ export const resistenciasEnemigo: Resistances = {
 
 export const combatStatsEnemigo: CombatStats = {
   maxHP: 50,
-  maxMP: 10,
   attackPower: 8,
   magicPower: 0,
   criticalChance: 2,
@@ -96,7 +89,6 @@ export const combatStatsEnemigo: CombatStats = {
   blockChance: 0,
   blockValue: 0,
   lifeSteal: 0,
-  manaSteal: 0,
   damageReduction: 2,
   movementSpeed: 3,
 };

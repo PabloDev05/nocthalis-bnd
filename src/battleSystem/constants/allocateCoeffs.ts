@@ -1,7 +1,5 @@
 // Coeficientes por punto invertido en base stats -> incrementos en combatStats
-// Usamos solo "agility"; "dexterity" existe como clave vacía porque se mapea a AGI en el service.
-
-import type { CombatStats, BaseStats } from "../interfaces/character/CharacterClass.interface";
+import type { CombatStats, BaseStats } from "../../interfaces/character/CharacterClass.interface";
 
 export const POINTS_PER_LEVEL = 5 as const;
 
@@ -18,7 +16,8 @@ export const SOFTCAP_K = {
 } as const;
 
 export type ClassKey = "Guerrero" | "Asesino" | "Mago" | "Arquero";
-export type BaseKey = keyof Pick<BaseStats, "strength" | "dexterity" | "intelligence" | "vitality" | "agility" | "endurance" | "luck">;
+
+export type BaseKey = keyof Pick<BaseStats, "strength" | "dexterity" | "intelligence" | "vitality" | "endurance" | "luck">;
 
 export type PerPointDelta = {
   combat?: Partial<
@@ -30,13 +29,15 @@ export type PerPointDelta = {
   stats?: Partial<Pick<BaseStats, "physicalDefense" | "magicalDefense">>;
 };
 
-// Nota: dexterity: {} en todas las clases para satisfacer el tipo.
-// La contribución real de DEX se maneja como alias de AGI en allocation.service.ts.
+/**
+ * Coeficientes por clase.
+ * - Antes: evasion/AS/MS venían de agility (+ alias de dex).
+ * - Ahora: TODO eso viene de dexterity directamente.
+ */
 export const CLASS_COEFFS: Record<ClassKey, Record<BaseKey, PerPointDelta>> = {
   Guerrero: {
     strength: { combat: { attackPower: 1.5 } },
-    agility: { combat: { evasion: 0.2, attackSpeed: 0.05, attackPower: 0.4 } },
-    dexterity: {}, // alias a AGI (sin coef propio aquí)
+    dexterity: { combat: { evasion: 0.2, attackSpeed: 0.05, attackPower: 0.4 } }, // ← sustituye agility
     vitality: { combat: { maxHP: 11 } },
     endurance: {
       combat: { damageReduction: 0.25, blockValue: 0.2, blockChance: 0.05 },
@@ -48,8 +49,7 @@ export const CLASS_COEFFS: Record<ClassKey, Record<BaseKey, PerPointDelta>> = {
 
   Asesino: {
     strength: { combat: { attackPower: 1.2 } },
-    agility: { combat: { evasion: 0.15, attackSpeed: 0.07, attackPower: 0.5 } },
-    dexterity: {}, // alias a AGI
+    dexterity: { combat: { evasion: 0.15, attackSpeed: 0.07, attackPower: 0.5 } }, // ← sustituye agility
     vitality: { combat: { maxHP: 9 } },
     endurance: {
       combat: { damageReduction: 0.2, blockValue: 0.15 },
@@ -61,27 +61,32 @@ export const CLASS_COEFFS: Record<ClassKey, Record<BaseKey, PerPointDelta>> = {
 
   Mago: {
     strength: { combat: { attackPower: 0.15 } },
-    agility: { combat: { evasion: 0.15, attackSpeed: 0.03 } },
-    dexterity: {}, // alias a AGI
+    dexterity: { combat: { evasion: 0.15, attackSpeed: 0.03 } }, // ← sustituye agility
     vitality: { combat: { maxHP: 6 } },
-    endurance: { combat: { damageReduction: 0.1 }, stats: { physicalDefense: 0.2, magicalDefense: 0.3 } },
+    endurance: {
+      combat: { damageReduction: 0.1 },
+      stats: { physicalDefense: 0.2, magicalDefense: 0.3 },
+    },
     luck: { combat: { criticalChance: 0.25, criticalDamageBonus: 0.4 } },
     intelligence: { combat: { magicPower: 2.0 } },
   },
 
   Arquero: {
     strength: { combat: { attackPower: 0.8 } },
-    agility: {
+    dexterity: {
+      // ← sustituye agility
       combat: {
         evasion: 0.2, // +0.20% evasion por punto
         attackSpeed: 0.15, // +0.15 AS por punto
         movementSpeed: 0.06, // +0.06 MS por punto
-        attackPower: 0.3, // NUEVO: +0.3 AP por punto (main stat aporta daño)
+        attackPower: 0.3, // Aporta daño desde su main stat
       },
     },
-    dexterity: {}, // alias a AGI (sin coef propio aquí)
     vitality: { combat: { maxHP: 8 } },
-    endurance: { combat: { damageReduction: 0.2 }, stats: { physicalDefense: 0.3, magicalDefense: 0.2 } },
+    endurance: {
+      combat: { damageReduction: 0.2 },
+      stats: { physicalDefense: 0.3, magicalDefense: 0.2 },
+    },
     luck: { combat: { criticalChance: 0.25, criticalDamageBonus: 0.5 } },
     intelligence: { combat: {} },
   },

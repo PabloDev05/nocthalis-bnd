@@ -1,7 +1,7 @@
 // Paquetes de pasivas por CLASE: lógica runtime (por ronda/golpe).
 const DBG = process.env.DEBUG_COMBAT === "1";
 
-import type { PassiveHooks } from "../../combat/CombatManager";
+import type { PassiveHooks } from "../passives/types";
 
 export type ClassPassivePack = {
   name: string;

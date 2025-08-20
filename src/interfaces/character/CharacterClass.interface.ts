@@ -50,9 +50,7 @@ export interface BaseStats {
   physicalDefense: number;
   magicalDefense: number;
   luck: number;
-  agility: number;
   endurance: number;
-  wisdom: number;
 }
 
 export interface Resistances {
@@ -76,7 +74,6 @@ export interface Resistances {
 
 export interface CombatStats {
   maxHP: number;
-  maxMP: number;
   attackPower: number;
   magicPower: number;
   criticalChance: number;
@@ -86,7 +83,6 @@ export interface CombatStats {
   blockChance: number;
   blockValue: number;
   lifeSteal: number;
-  manaSteal: number;
   damageReduction: number;
   movementSpeed: number;
 }

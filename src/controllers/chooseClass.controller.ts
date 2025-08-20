@@ -1,50 +1,60 @@
-import { Request, Response } from "express";
-import mongoose, { Types } from "mongoose";
-import { User, type UserDocument } from "../models/User";
-import { CharacterClass, type CharacterClassDocument } from "../models/CharacterClass";
+import { RequestHandler } from "express";
+import mongoose from "mongoose";
+import { User } from "../models/User";
+import { CharacterClass } from "../models/CharacterClass";
 import { Character } from "../models/Character";
 
-interface AuthReq extends Request {
-  user?: { id: string; username: string };
-}
-
-export const chooseClass = async (req: AuthReq, res: Response) => {
-  const { selectedClass } = req.body as { selectedClass?: string }; // _id de CharacterClass
+/**
+ * POST /character/choose-class
+ * body: { selectedClass: string }  // _id de CharacterClass
+ */
+export const chooseClass: RequestHandler = async (req, res) => {
+  const { selectedClass } = (req.body as { selectedClass?: string }) || {};
   const userId = req.user?.id;
 
-  if (!userId) return res.status(401).json({ message: "No autenticado" });
-  if (!selectedClass || !Types.ObjectId.isValid(selectedClass)) {
-    return res.status(400).json({ message: "selectedClass inválido" });
+  if (!userId) {
+    res.status(401).json({ message: "No autenticado" });
+    return;
+  }
+  if (!selectedClass || !mongoose.Types.ObjectId.isValid(selectedClass)) {
+    res.status(400).json({ message: "selectedClass inválido" });
+    return;
   }
 
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const user = (await User.findById(userId).session(session)) as UserDocument | null;
+    // Usuario
+    const user = await User.findById(userId).session(session);
     if (!user) {
       await session.abortTransaction();
-      return res.status(404).json({ message: "Usuario no encontrado" });
+      res.status(404).json({ message: "Usuario no encontrado" });
+      return;
     }
-
     if (user.classChosen) {
       await session.abortTransaction();
-      return res.status(400).json({ message: "La clase ya fue elegida" });
+      res.status(400).json({ message: "La clase ya fue elegida" });
+      return;
     }
 
+    // Evitar duplicado de personaje
     const alreadyHasChar = await Character.findOne({ userId: user._id }).session(session);
     if (alreadyHasChar) {
       await session.abortTransaction();
-      return res.status(400).json({ message: "El usuario ya tiene personaje" });
+      res.status(400).json({ message: "El usuario ya tiene personaje" });
+      return;
     }
 
-    const charClass = (await CharacterClass.findById(selectedClass).session(session)) as CharacterClassDocument | null;
+    // Clase
+    const charClass = await CharacterClass.findById(selectedClass).session(session);
     if (!charClass) {
       await session.abortTransaction();
-      return res.status(404).json({ message: "Clase no encontrada" });
+      res.status(404).json({ message: "Clase no encontrada" });
+      return;
     }
 
-    // Fuente de verdad = Character: clonamos valores base iniciales
+    // Crear personaje clonando valores base de la clase
     const character = await Character.create(
       [
         {
@@ -62,16 +72,17 @@ export const chooseClass = async (req: AuthReq, res: Response) => {
       { session }
     ).then((docs) => docs[0]);
 
+    // Marcar usuario
     user.characterClass = charClass._id;
     user.classChosen = true;
     await user.save({ session });
 
     await session.commitTransaction();
 
-    // ⚠️ Al responder: populate solo metadatos de la clase (no stats del template)
+    // Respuesta con metadatos de clase (sin stats del template si no querés)
     const characterPopulated = await Character.findById(character._id).populate({ path: "classId", select: "name iconName imageMainClassUrl passiveDefault subclasses" }).lean();
 
-    return res.status(200).json({
+    res.status(200).json({
       message: "Clase asignada con éxito.",
       user: {
         id: user._id.toString(),
@@ -82,9 +93,11 @@ export const chooseClass = async (req: AuthReq, res: Response) => {
       character: characterPopulated ?? character,
     });
   } catch (err) {
-    await session.abortTransaction();
+    try {
+      await session.abortTransaction();
+    } catch {}
     console.error("Error al elegir clase:", err);
-    return res.status(500).json({ message: "Error interno del servidor" });
+    res.status(500).json({ message: "Error interno del servidor" });
   } finally {
     session.endSession();
   }

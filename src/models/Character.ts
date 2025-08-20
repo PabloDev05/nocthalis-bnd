@@ -23,9 +23,7 @@ export interface CharacterDocument extends Document<Types.ObjectId> {
     physicalDefense: number;
     magicalDefense: number;
     luck: number;
-    agility: number;
     endurance: number;
-    wisdom: number;
   };
 
   resistances: {
@@ -49,7 +47,6 @@ export interface CharacterDocument extends Document<Types.ObjectId> {
 
   combatStats: {
     maxHP: number;
-    maxMP: number;
     attackPower: number;
     magicPower: number;
     criticalChance: number;
@@ -59,7 +56,6 @@ export interface CharacterDocument extends Document<Types.ObjectId> {
     blockChance: number;
     blockValue: number;
     lifeSteal: number;
-    manaSteal: number;
     damageReduction: number;
     movementSpeed: number;
   };
@@ -82,9 +78,7 @@ const StatsSchema = new Schema(
     physicalDefense: { type: Number, default: 0 },
     magicalDefense: { type: Number, default: 0 },
     luck: { type: Number, default: 0 },
-    agility: { type: Number, default: 0 },
     endurance: { type: Number, default: 0 },
-    wisdom: { type: Number, default: 0 },
   },
   { _id: false }
 );
@@ -114,7 +108,6 @@ const ResistancesSchema = new Schema(
 const CombatStatsSchema = new Schema(
   {
     maxHP: { type: Number, default: 0 },
-    maxMP: { type: Number, default: 0 },
     attackPower: { type: Number, default: 0 },
     magicPower: { type: Number, default: 0 },
     criticalChance: { type: Number, default: 0 },
@@ -124,7 +117,6 @@ const CombatStatsSchema = new Schema(
     blockChance: { type: Number, default: 0 },
     blockValue: { type: Number, default: 0 },
     lifeSteal: { type: Number, default: 0 },
-    manaSteal: { type: Number, default: 0 },
     damageReduction: { type: Number, default: 0 },
     movementSpeed: { type: Number, default: 0 },
   },

@@ -3,14 +3,12 @@ import { Types } from "mongoose";
 import { Character, type Equipment, type EquipmentSlot } from "../models/Character";
 import { Item, type ItemLean } from "../models/Item";
 import { computeProgression } from "../services/progression.service";
-import type { AuthReq } from "../middleware/requireAuth";
 
-// Claves de slot válidas (desde el tipo del modelo)
-const ALLOWED_SLOTS: readonly EquipmentSlot[] = ["helmet", "chest", "gloves", "boots", "mainWeapon", "offWeapon", "ring", "belt", "amulet"] as const;
-
+// Slots válidos según el modelo
+const ALLOWED_SLOTS = ["helmet", "chest", "gloves", "boots", "mainWeapon", "offWeapon", "ring", "belt", "amulet"] as const satisfies Readonly<EquipmentSlot[]>;
 type AllowedSlot = (typeof ALLOWED_SLOTS)[number];
 
-/** Asegura estructura completa de equipment */
+/** Garantiza que `character.equipment` tenga todas las claves inicializadas */
 function ensureEquipment(char: { equipment?: Partial<Equipment> }) {
   const defaults: Equipment = {
     helmet: null,
@@ -28,14 +26,12 @@ function ensureEquipment(char: { equipment?: Partial<Equipment> }) {
     return;
   }
   for (const k of ALLOWED_SLOTS) {
-    if (typeof char.equipment[k] === "undefined") {
-      char.equipment[k] = defaults[k];
-    }
+    if (typeof char.equipment[k] === "undefined") char.equipment[k] = defaults[k];
   }
 }
 
-/** GET /character/inventory */
-export async function getInventory(req: AuthReq, res: Response) {
+/** GET /character/inventory  → equipo (ids) + inventario (items lean) */
+export async function getInventory(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ message: "No autenticado" });
@@ -45,16 +41,15 @@ export async function getInventory(req: AuthReq, res: Response) {
 
     ensureEquipment(character);
 
-    // Cargar ítems del inventario
     const invIds = (character.inventory || []).filter(Boolean);
     let items: ItemLean[] = [];
-    if (invIds.length > 0) {
+    if (invIds.length) {
       items = await Item.find({ _id: { $in: invIds } }).lean<ItemLean[]>({ virtuals: true });
     }
 
     return res.json({
       equipment: character.equipment, // ids string o null
-      inventory: items, // objetos con 'id' (sin _id)
+      inventory: items, // objetos lean con 'id' (virtual)
     });
   } catch (err) {
     console.error("getInventory error:", err);
@@ -63,7 +58,7 @@ export async function getInventory(req: AuthReq, res: Response) {
 }
 
 /** POST /character/equip  { itemId } */
-export async function equipItem(req: AuthReq, res: Response) {
+export async function equipItem(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
     const { itemId } = req.body as { itemId?: string };
@@ -76,7 +71,6 @@ export async function equipItem(req: AuthReq, res: Response) {
     if (!character) return res.status(404).json({ message: "Personaje no encontrado" });
     if (!item) return res.status(404).json({ message: "Ítem no encontrado" });
 
-    // Validar slot del ítem
     const incomingSlot = item.slot as EquipmentSlot;
     if (!ALLOWED_SLOTS.includes(incomingSlot)) {
       return res.status(400).json({ message: `Slot no soportado: ${incomingSlot}` });
@@ -90,7 +84,7 @@ export async function equipItem(req: AuthReq, res: Response) {
 
     ensureEquipment(character);
 
-    // Si había algo equipado, moverlo al inventario
+    // Si había algo equipado en ese slot, lo mandamos al inventario
     const prev = character.equipment[slot];
     if (prev) {
       character.inventory = character.inventory || [];
@@ -99,11 +93,12 @@ export async function equipItem(req: AuthReq, res: Response) {
       }
     }
 
-    // Equipar el nuevo (guardamos el id como string)
-    character.equipment[slot] = item.id;
+    // Equipa nuevo (guardamos id como string)
+    const itemIdStr = item.id ?? (item as any)._id?.toString();
+    character.equipment[slot] = itemIdStr;
 
-    // Remover del inventario si estaba
-    character.inventory = (character.inventory || []).filter((x: string) => String(x) !== String(item.id));
+    // Quitar del inventario si estaba
+    character.inventory = (character.inventory || []).filter((x: string) => String(x) !== String(itemIdStr));
 
     await character.save();
 
@@ -120,7 +115,7 @@ export async function equipItem(req: AuthReq, res: Response) {
 }
 
 /** POST /character/unequip  { slot } */
-export async function unequipItem(req: AuthReq, res: Response) {
+export async function unequipItem(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
     const { slot } = req.body as { slot?: string };
@@ -164,7 +159,7 @@ export async function unequipItem(req: AuthReq, res: Response) {
 }
 
 /** POST /character/use-item  { itemId } — consumibles */
-export async function useConsumable(req: AuthReq, res: Response) {
+export async function useConsumable(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
     const { itemId } = req.body as { itemId?: string };
@@ -177,28 +172,27 @@ export async function useConsumable(req: AuthReq, res: Response) {
     if (!character) return res.status(404).json({ message: "Personaje no encontrado" });
     if (!item) return res.status(404).json({ message: "Ítem no encontrado" });
 
-    // Validar que esté en inventario (por id string)
-    const inInv = (character.inventory || []).some((x: string) => String(x) === String(item.id));
+    // Debe estar en inventario
+    const inInv = (character.inventory || []).some((x: string) => String(x) === String(item.id ?? (item as any)._id));
     if (!inInv) return res.status(400).json({ message: "El ítem no está en tu inventario" });
 
-    // Debe ser consumible
     if (!item.isConsumable) {
       return res.status(400).json({ message: "El ítem no es consumible" });
     }
 
-    // TODO: aplicar efecto según tipo/efectos
-    character.inventory = (character.inventory || []).filter((x: string) => String(x) !== String(item.id));
+    // TODO: aplicar efecto según 'effects' / tipo
+    character.inventory = (character.inventory || []).filter((x: string) => String(x) !== String(item.id ?? (item as any)._id));
     await character.save();
 
-    return res.json({ message: "Consumible usado", itemId: item.id });
+    return res.json({ message: "Consumible usado", itemId: item.id ?? (item as any)._id?.toString() });
   } catch (err) {
     console.error("useConsumable error:", err);
     return res.status(500).json({ message: "Error interno" });
   }
 }
 
-/** GET /character/progression  — usa la curva acumulativa */
-export async function getProgression(req: AuthReq, res: Response) {
+/** GET /character/progression — curva acumulativa (todos enteros) */
+export async function getProgression(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ message: "No autenticado" });
@@ -219,7 +213,7 @@ export async function getProgression(req: AuthReq, res: Response) {
       xpSinceLevel: p.xpSinceLevel,
       xpForThisLevel: p.xpForThisLevel,
       xpToNext: p.xpToNext,
-      xpPercent: p.xpPercent,
+      xpPercent: p.xpPercentInt, // porcentaje entero 0..100
       isMaxLevel: p.isMaxLevel,
     });
   } catch (err) {
