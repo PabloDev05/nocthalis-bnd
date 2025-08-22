@@ -1,3 +1,4 @@
+// src/controllers/auth.controller.ts
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
@@ -12,18 +13,18 @@ function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Selecciona explícitamente los campos para login (forzamos incluir el hash). */
-const USER_LOGIN_PROJECTION = "+password +passwordHash classChosen characterClass username email";
+/** Para login: incluimos hash y campos mínimos */
+const USER_LOGIN_PROJECTION = "+password +passwordHash email username classChosen characterClass";
 
 export const register = async (req: Request, res: Response) => {
-  const { username, password, email, characterClass } = req.body as {
+  const { username, email, password, characterClass } = req.body as {
     username?: string;
-    password?: string;
     email?: string;
+    password?: string;
     characterClass?: string;
   };
 
-  if (!username || !password || !email || !characterClass) {
+  if (!username || !email || !password || !characterClass) {
     return res.status(400).json({ message: "Faltan campos requeridos" });
   }
 
@@ -33,12 +34,15 @@ export const register = async (req: Request, res: Response) => {
     return res.status(500).json({ message: "Config error" });
   }
 
+  const usernameNorm = String(username).trim();
   const emailNorm = String(email).trim().toLowerCase();
 
-  // Evitar duplicados por carrera: además del findOne, manejamos E11000 en catch
-  const exists = await User.findOne({ $or: [{ username }, { email: emailNorm }] }).lean();
+  // Evitar duplicados por carrera (además manejamos E11000)
+  const exists = await User.findOne({
+    $or: [{ username: usernameNorm }, { email: emailNorm }],
+  }).lean();
   if (exists) {
-    return res.status(400).json({ message: "Usuario o email ya existe" });
+    return res.status(400).json({ message: "El usuario o el email ya están registrados" });
   }
 
   const session = await mongoose.startSession();
@@ -53,13 +57,13 @@ export const register = async (req: Request, res: Response) => {
 
     const passwordHash = await bcrypt.hash(password, 10);
 
+    // Crear usuario
     const newUser = await User.create(
       [
         {
-          username: String(username).trim(),
+          username: usernameNorm,
           email: emailNorm,
-          // Guardamos hash en "password"
-          password: passwordHash,
+          password: passwordHash, // campo actual; mantenemos compat con passwordHash legacy en login
           classChosen: true,
           characterClass: clazz._id,
         },
@@ -67,6 +71,7 @@ export const register = async (req: Request, res: Response) => {
       { session }
     ).then((r) => r[0]);
 
+    // Crear personaje base
     await Character.create(
       [
         {
@@ -85,18 +90,19 @@ export const register = async (req: Request, res: Response) => {
 
     await session.commitTransaction();
 
-    const token = jwt.sign({ id: newUser._id.toString(), username: newUser.username }, secret, {
-      expiresIn: "1h",
-      algorithm: "HS256",
-    });
+    const token = jwt.sign({ id: newUser._id.toString(), email: emailNorm, username: usernameNorm }, secret, { expiresIn: "1h", algorithm: "HS256" });
 
     return res.status(201).json({
       message: "Usuario registrado correctamente",
       token,
-      userId: newUser._id,
-      username: newUser.username,
+      user: {
+        id: newUser._id.toString(),
+        email: emailNorm,
+        username: usernameNorm,
+      },
       classChosen: true,
-      characterClassId: clazz._id,
+      characterClass: clazz._id, // lo que usa tu front
+      characterClassId: clazz._id, // alias por si algo viejo lo lee
       characterClassName: clazz.name,
     });
   } catch (err: any) {
@@ -104,17 +110,14 @@ export const register = async (req: Request, res: Response) => {
     try {
       await session.abortTransaction();
     } catch {}
-    // Duplicados (usuario/email) por carrera
     if (err?.code === 11000) {
-      return res.status(400).json({ message: "Usuario o email ya existe" });
+      return res.status(400).json({ message: "El usuario o el email ya están registrados" });
     }
     return res.status(500).json({ message: "Error interno del servidor" });
   } finally {
     session.endSession();
   }
 };
-
-/* -------------------------------- LOGIN (email + password) ----------- */
 
 export const login = async (req: Request, res: Response) => {
   const { email, password } = req.body as {
@@ -134,10 +137,9 @@ export const login = async (req: Request, res: Response) => {
 
   const emailNorm = String(email).trim().toLowerCase();
 
-  // 1) Búsqueda directa por email normalizado (actual)
+  // 1) Búsqueda directa por email normalizado
   let user = (await User.findOne({ email: emailNorm }).select(USER_LOGIN_PROJECTION).lean()) || null;
 
-  // 2) Fallback case-insensitive si hay datos viejos sin normalizar
   if (!user) {
     const rx = new RegExp(`^${escapeRegex(emailNorm)}$`, "i");
     user = (await User.findOne({ email: rx }).select(USER_LOGIN_PROJECTION).lean()) || null;
@@ -149,7 +151,7 @@ export const login = async (req: Request, res: Response) => {
     return res.status(400).json({ message: "Credenciales inválidas" });
   }
 
-  // Compatibilidad: aceptamos `password` (actual) o `passwordHash` (legacy)
+  // Compat: aceptamos `password` (actual) o `passwordHash` (legacy)
   const hashed = (user as any).password || (user as any).passwordHash;
   if (!hashed || typeof hashed !== "string") {
     if (DBG) console.warn("[LOGIN] usuario sin hash:", { id: (user as any)._id });
@@ -162,7 +164,7 @@ export const login = async (req: Request, res: Response) => {
     return res.status(400).json({ message: "Credenciales inválidas" });
   }
 
-  // opcional: nombre de clase (para UI)
+  // Nombre de clase (para UI)
   let className: string | null = null;
   if ((user as any).characterClass) {
     const clazz = await CharacterClass.findById((user as any).characterClass)
@@ -171,17 +173,26 @@ export const login = async (req: Request, res: Response) => {
     className = clazz?.name ?? null;
   }
 
-  const token = jwt.sign({ id: (user as any)._id.toString(), username: (user as any).username }, secret, {
-    expiresIn: "1h",
-    algorithm: "HS256",
-  });
+  const token = jwt.sign(
+    {
+      id: (user as any)._id.toString(),
+      email: (user as any).email,
+      username: (user as any).username ?? undefined,
+    },
+    secret,
+    { expiresIn: "1h", algorithm: "HS256" }
+  );
 
   return res.json({
     token,
-    userId: (user as any)._id,
-    username: (user as any).username,
+    user: {
+      id: (user as any)._id.toString(),
+      email: (user as any).email,
+      username: (user as any).username ?? null,
+    },
     classChosen: !!(user as any).classChosen,
-    characterClassId: (user as any).characterClass ?? null,
+    characterClass: (user as any).characterClass ?? null, // lo que tu front espera
+    characterClassId: (user as any).characterClass ?? null, // alias
     characterClassName: className,
   });
 };
