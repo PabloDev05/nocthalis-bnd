@@ -1,7 +1,7 @@
 // src/models/Enemy.ts
 import mongoose, { Document, Schema } from "mongoose";
 import { BaseStats, Resistances, CombatStats } from "../interfaces/character/CharacterClass.interface";
-import type { SlotKey } from "./Item";
+import type { SlotKey } from "../interfaces/Item/Item.interface";
 
 // ---- Tipos auxiliares ----
 export type EnemyTier = "common" | "elite" | "rare";
