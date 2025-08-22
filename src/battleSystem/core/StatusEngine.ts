@@ -3,7 +3,7 @@
  * HOY: sólo gestiona stacks/duración y emite eventos.
  * MAÑANA: podés hacer que afecte daño, turnos, etc.
  */
-import type { StatusKey } from "../../constants/status";
+import type { StatusKey } from "../constants/status";
 
 const DBG = process.env.DEBUG_COMBAT === "1";
 type Side = "player" | "enemy";

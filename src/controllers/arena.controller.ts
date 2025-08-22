@@ -1,3 +1,9 @@
+// Match para PvP moderno (con estado y snapshots).
+// Guarda ambos lados (attacker/defender) con snapshots “congelados” (stats, arma min/max, etc.).
+// outcome es POV atacante (attacker/defender/draw) y winner POV motor (player/enemy/draw).
+// Puede almacenar timeline/log/snapshots, pero podés decidir guardar solo lo necesario (y slice en listados).
+// Ideal para colas de arena, rankings y re-correr peleas siempre con el mismo snapshot.
+
 import { Request, Response } from "express";
 import { Types } from "mongoose";
 import { Character } from "../models/Character";
@@ -83,8 +89,10 @@ export async function postArenaChallengeController(req: Request, res: Response) 
     if (!meId) return res.status(401).json({ message: "No autenticado" });
 
     const opponentId = String((req.body ?? {}).opponentId ?? "");
-    if (!opponentId) {
-      return res.status(400).json({ message: "opponentId requerido" });
+    if (!opponentId) return res.status(400).json({ message: "opponentId requerido" });
+
+    if (opponentId === meId) {
+      return res.status(400).json({ message: "No podés desafiarte a vos mismo" });
     }
 
     const meOID = asObjectId(meId);
@@ -96,14 +104,8 @@ export async function postArenaChallengeController(req: Request, res: Response) 
 
     const [attackerDoc, defenderDoc] = await Promise.all([Character.findOne({ userId: meOID }), Character.findOne({ userId: oppOID })]);
 
-    if (!attackerDoc) {
-      console.error("[ARENA][POST/challenges] attackerDoc no encontrado", { meId });
-      return res.status(404).json({ message: "Tu personaje no existe" });
-    }
-    if (!defenderDoc) {
-      console.error("[ARENA][POST/challenges] defenderDoc no encontrado", { opponentId });
-      return res.status(404).json({ message: "Oponente no encontrado" });
-    }
+    if (!attackerDoc) return res.status(404).json({ message: "Tu personaje no existe" });
+    if (!defenderDoc) return res.status(404).json({ message: "Oponente no encontrado" });
 
     const [attClass, defClass] = await Promise.all([
       attackerDoc.classId ? CharacterClass.findById(attackerDoc.classId).select("name passiveDefault") : null,
@@ -113,7 +115,6 @@ export async function postArenaChallengeController(req: Request, res: Response) 
     const attackerRaw: any = attackerDoc.toObject();
     const defenderRaw: any = defenderDoc.toObject();
 
-    // Inyectamos { class: { name, passiveDefault } } antes del snapshot
     if (attClass) {
       const c = attClass.toObject();
       attackerRaw.class = { name: c.name, passiveDefault: c.passiveDefault };
@@ -138,8 +139,8 @@ export async function postArenaChallengeController(req: Request, res: Response) 
       defenderSnapshot,
       seed,
 
-      // Campos neutros para compat con tu schema previo
-      mode: "pending",
+      // 👇 estado inicial
+      mode: "pvp", // ⚠️ importante: NO "pending"
       status: "pending",
       winner: null,
       outcome: null,
@@ -150,7 +151,7 @@ export async function postArenaChallengeController(req: Request, res: Response) 
       rewards: null,
     });
 
-    return res.json({ matchId: (match._id as any).toString() });
+    return res.status(201).json({ matchId: (match._id as any).toString(), status: match.status });
   } catch (err: any) {
     console.error("postArenaChallengeController error:", err);
     const message = err?.errors ? `Validación: ${Object.keys(err.errors).join(", ")}` : err?.message || "Error interno del servidor";

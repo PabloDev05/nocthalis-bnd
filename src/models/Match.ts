@@ -1,3 +1,4 @@
+// src/models/Match.ts
 import { Schema, model, Types, Document } from "mongoose";
 
 /* ───────── tipos base ───────── */
@@ -104,26 +105,36 @@ export interface MatchDoc extends Document<Types.ObjectId> {
 
   /** para migraciones/compat con runners nuevos */
   runnerVersion?: number;
+
+  /** virtual */
+  id?: string;
 }
+
+/* ───────── helpers de casteo a entero ───────── */
+const i = (v: any) => (Number.isFinite(Number(v)) ? Math.floor(Number(v)) : v);
 
 /* ───────── subesquemas ───────── */
 
 const WeaponSpecSchema = new Schema<WeaponSpec>(
   {
     slug: { type: String, required: true },
-    min: { type: Number, required: true },
-    max: { type: Number, required: true },
+    min: { type: Number, required: true, set: i },
+    max: { type: Number, required: true, set: i },
     type: { type: String },
   },
   { _id: false }
 );
+// validación min ≤ max
+WeaponSpecSchema.path("max").validate(function (this: any, v: number) {
+  return typeof v === "number" && typeof this.min === "number" ? v >= this.min : true;
+}, "WeaponSpec.max must be >= min");
 
 const SnapshotSchema = new Schema<CharacterSnapshot>(
   {
     characterId: { type: Schema.Types.ObjectId, required: true },
     userId: { type: Schema.Types.ObjectId, required: true },
     username: { type: String, required: true },
-    level: { type: Number, required: true },
+    level: { type: Number, required: true, set: i },
     className: { type: String, required: true },
 
     // weapon/offHand aceptan string (legacy) o objeto (nuevo)
@@ -135,9 +146,9 @@ const SnapshotSchema = new Schema<CharacterSnapshot>(
     stats: { type: Schema.Types.Mixed, default: {} },
 
     combat: {
-      maxHP: { type: Number, required: true },
-      attackPower: { type: Number, required: true },
-      magicPower: { type: Number, required: true },
+      maxHP: { type: Number, required: true, set: i },
+      attackPower: { type: Number, required: true, set: i },
+      magicPower: { type: Number, required: true, set: i },
       evasion: { type: Number, required: true },
       blockChance: { type: Number, required: true },
       damageReduction: { type: Number, required: true },
@@ -146,30 +157,30 @@ const SnapshotSchema = new Schema<CharacterSnapshot>(
       attackSpeed: { type: Number, required: true },
     },
 
-    currentHP: { type: Number, required: true },
+    currentHP: { type: Number, required: true, set: i },
   },
   { _id: false }
 );
 
 const TimelineSchema = new Schema<TimelineEntry>(
   {
-    turn: { type: Number, required: true },
+    turn: { type: Number, required: true, set: i },
     source: { type: String, enum: ["attacker", "defender"], required: true },
     event: { type: String, enum: ["hit", "crit", "block", "miss"], required: true },
-    damage: { type: Number, required: true, min: 0 },
-    attackerHP: { type: Number, required: true, min: 0 },
-    defenderHP: { type: Number, required: true, min: 0 },
+    damage: { type: Number, required: true, min: 0, set: i },
+    attackerHP: { type: Number, required: true, min: 0, set: i },
+    defenderHP: { type: Number, required: true, min: 0, set: i },
   },
   { _id: false }
 );
 
 const CombatSnapshotSchema = new Schema<CombatSnapshot>(
   {
-    round: { type: Number, required: true },
+    round: { type: Number, required: true, set: i },
     actor: { type: String, enum: ["player", "enemy"], required: true },
-    damage: { type: Number, required: true, min: 0 },
-    playerHP: { type: Number, required: true, min: 0 },
-    enemyHP: { type: Number, required: true, min: 0 },
+    damage: { type: Number, required: true, min: 0, set: i },
+    playerHP: { type: Number, required: true, min: 0, set: i },
+    enemyHP: { type: Number, required: true, min: 0, set: i },
     events: { type: [String], default: [] },
     status: { type: Schema.Types.Mixed },
   },
@@ -190,32 +201,63 @@ const MatchSchema = new Schema<MatchDoc>(
     attackerSnapshot: { type: SnapshotSchema, required: true },
     defenderSnapshot: { type: SnapshotSchema, required: true },
 
-    seed: { type: Number, required: true },
+    seed: { type: Number, required: true, set: i },
 
-    status: { type: String, enum: ["pending", "simulated", "resolved"], default: "pending", index: true },
+    status: {
+      type: String,
+      enum: ["pending", "simulated", "resolved"],
+      default: "pending",
+      index: true,
+    },
 
     outcome: { type: String, enum: ["attacker", "defender", "draw"] },
     winner: { type: String, enum: ["player", "enemy", "draw"] },
 
-    turns: { type: Number },
+    turns: { type: Number, set: i },
     timeline: { type: [TimelineSchema], default: [] },
     log: { type: [String], default: [] },
     snapshots: { type: [CombatSnapshotSchema], default: [] },
 
     rewards: {
-      honor: { type: Number, default: 0 },
-      xp: { type: Number, default: 0 },
-      gold: { type: Number, default: 0 },
+      honor: { type: Number, default: 0, set: i },
+      xp: { type: Number, default: 0, set: i },
+      gold: { type: Number, default: 0, set: i },
     },
 
-    runnerVersion: { type: Number, default: 1 },
+    runnerVersion: { type: Number, default: 1, set: i },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    versionKey: false,
+    toJSON: {
+      virtuals: true,
+      transform: (_doc, ret) => {
+        ret.id = String(ret._id);
+        delete (ret as any)._id;
+        return ret;
+      },
+    },
+    toObject: {
+      virtuals: true,
+      transform: (_doc, ret) => {
+        ret.id = String(ret._id);
+        delete (ret as any)._id;
+        return ret;
+      },
+    },
+  }
 );
+
+/* virtual id */
+MatchSchema.virtual("id").get(function (this: { _id: Types.ObjectId }) {
+  return this._id.toString();
+});
 
 /* índices compuestos útiles para listados */
 MatchSchema.index({ status: 1, createdAt: -1 });
 MatchSchema.index({ attackerUserId: 1, createdAt: -1 });
 MatchSchema.index({ defenderUserId: 1, createdAt: -1 });
+MatchSchema.index({ mode: 1, createdAt: -1 });
+MatchSchema.index({ seed: 1 });
 
 export const Match = model<MatchDoc>("Match", MatchSchema);
