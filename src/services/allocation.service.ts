@@ -1,13 +1,13 @@
 // src/services/allocation.service.ts
-// Lógica de asignación de puntos
-// ✅ Soft-caps reales y luego cap duro.
-
-const DBG = process.env.DEBUG_ALLOCATION === "1";
+// Lógica de asignación de puntos (con soft-cap y cap duro)
 
 import type { Document } from "mongoose";
 import type { BaseStats, CombatStats } from "../interfaces/character/CharacterClass.interface";
-import { CLASS_COEFFS, POINTS_PER_LEVEL, STAT_CAPS, SOFTCAP_K, type ClassKey, type BaseKey } from "../battleSystem/constants/allocateCoeffs";
+import { CLASS_COEFFS, POINTS_PER_LEVEL, STAT_CAPS, SOFTCAP_K, type ClassKey, type BaseKey, type PerPointDelta } from "../battleSystem/constants/allocateCoeffs"; // <-- ojo al nombre del archivo
 
+const DBG = process.env.DEBUG_ALLOCATION === "1";
+
+/* ---------------- utils numéricos ---------------- */
 function safeNum(n: any, d = 0) {
   const v = Number(n);
   return Number.isFinite(v) ? v : d;
@@ -15,6 +15,7 @@ function safeNum(n: any, d = 0) {
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
+/** Curva suave hacia el cap: resultado ∈ [0..CAP] */
 function softCap(raw: number, CAP: number, K: number) {
   if (raw <= 0) return 0;
   if (K <= 0) return clamp(raw, 0, CAP);
@@ -24,6 +25,7 @@ function softCap(raw: number, CAP: number, K: number) {
 
 const ALLOWED_KEYS: BaseKey[] = ["strength", "dexterity", "intelligence", "vitality", "endurance", "luck"];
 
+/* ---------------- puntos disponibles ---------------- */
 export function sumAllocations(alloc: Record<string, number>): number {
   return Object.values(alloc || {}).reduce((a, b) => a + (safeNum(b, 0) | 0), 0);
 }
@@ -46,6 +48,7 @@ export function computeAvailablePoints(level: number, current: BaseStats, classB
   return avail;
 }
 
+/* ---------------- deltas por clase ---------------- */
 function buildDeltasFor(className: ClassKey, alloc: Record<BaseKey, number>) {
   const coeff = CLASS_COEFFS[className] || CLASS_COEFFS["Guerrero"];
   const deltaStats: Partial<BaseStats> = {};
@@ -55,26 +58,34 @@ function buildDeltasFor(className: ClassKey, alloc: Record<BaseKey, number>) {
     const points = safeNum(alloc[k], 0) | 0;
     if (points <= 0) continue;
 
-    const del = coeff[k] || {};
-    if (del.combat) {
-      for (const [ck, v] of Object.entries(del.combat)) {
-        const inc = safeNum(v, 0) * points;
-        (deltaCombat as any)[ck] = safeNum((deltaCombat as any)[ck], 0) + inc;
-      }
+    // ⬅️ FIX: tipamos como PerPointDelta para evitar la unión de literales
+    const del = (coeff[k] ?? {}) as PerPointDelta;
+
+    // combat
+    const delCombat = (del.combat ?? {}) as Partial<CombatStats>;
+    for (const [ck, v] of Object.entries(delCombat)) {
+      const inc = safeNum(v, 0) * points;
+      (deltaCombat as any)[ck] = safeNum((deltaCombat as any)[ck], 0) + inc;
     }
-    if (del.stats) {
-      for (const [sk, v] of Object.entries(del.stats)) {
-        const inc = safeNum(v, 0) * points;
-        (deltaStats as any)[sk] = safeNum((deltaStats as any)[sk], 0) + inc;
-      }
+
+    // stats (defensas derivadas)
+    const delStats = (del.stats ?? {}) as Partial<BaseStats>;
+    for (const [sk, v] of Object.entries(delStats)) {
+      const inc = safeNum(v, 0) * points;
+      (deltaStats as any)[sk] = safeNum((deltaStats as any)[sk], 0) + inc;
     }
   }
 
   return { deltaStats, deltaCombat };
 }
 
+/* ---------------- aplicación ---------------- */
 export function applyAllocationsToCharacter(doc: Document & { stats: BaseStats; combatStats: CombatStats; classId?: any }, className: ClassKey, alloc: Record<string, number>) {
-  // 🧹 Filtramos solo claves permitidas; sin alias ni mapeos.
+  // Garantizamos objetos
+  (doc as any).stats = (doc as any).stats || ({} as BaseStats);
+  (doc as any).combatStats = (doc as any).combatStats || ({} as CombatStats);
+
+  // Filtramos solo claves permitidas; enteros y > 0
   const clean: Record<BaseKey, number> = {} as any;
   for (const [k, v] of Object.entries(alloc || {})) {
     if (!ALLOWED_KEYS.includes(k as BaseKey)) continue;
@@ -91,19 +102,19 @@ export function applyAllocationsToCharacter(doc: Document & { stats: BaseStats; 
 
   const { deltaStats, deltaCombat } = buildDeltasFor(className, clean);
 
-  // 1) Subir puntos en BaseStats
+  // 1) Subir puntos en base (enteros)
   for (const [k, v] of Object.entries(clean)) {
     const cur = safeNum((doc.stats as any)[k], 0);
-    (doc.stats as any)[k] = cur + (v as number);
+    (doc.stats as any)[k] = Math.floor(cur + (v as number));
   }
 
-  // 2) Aplicar incrementos secundarios a BaseStats
+  // 2) Incrementos secundarios a base (defensas) — enteros
   for (const [k, inc] of Object.entries(deltaStats)) {
     const cur = safeNum((doc.stats as any)[k], 0);
-    (doc.stats as any)[k] = cur + safeNum(inc, 0);
+    (doc.stats as any)[k] = Math.floor(cur + safeNum(inc, 0));
   }
 
-  // 3) Aplicar incrementos a CombatStats
+  // 3) Incrementos a combat (pueden ser decimales)
   for (const [k, inc] of Object.entries(deltaCombat)) {
     const cur = safeNum((doc.combatStats as any)[k], 0);
     (doc.combatStats as any)[k] = cur + safeNum(inc, 0);

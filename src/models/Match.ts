@@ -218,6 +218,7 @@ const MatchSchema = new Schema<MatchDoc>(
     log: { type: [String], default: [] },
     snapshots: { type: [CombatSnapshotSchema], default: [] },
 
+    // ⚠️ shape del schema (lo que se PERSISTE): xp, gold, honor
     rewards: {
       honor: { type: Number, default: 0, set: i },
       xp: { type: Number, default: 0, set: i },

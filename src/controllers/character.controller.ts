@@ -36,9 +36,9 @@ type CharacterResponseDTO = {
   selectedSubclass: SubclassDTO | null;
   level: number;
   experience: number;
-  stats: BaseStats; // ← tipado real
-  resistances: Resistances; // ← tipado real
-  combatStats: CombatStats; // ← tipado real
+  stats: BaseStats;
+  resistances: Resistances;
+  combatStats: CombatStats;
   equipment: Record<string, string | null>;
   inventory: string[];
   passivesUnlocked: string[];
@@ -47,7 +47,7 @@ type CharacterResponseDTO = {
   availablePoints?: number;
 };
 
-/** helpers de mapeo */
+/** helpers */
 const toId = (x: any) => (x?._id ?? x?.id)?.toString();
 const mapPassive = (p: any | undefined): PassiveDTO | null => (!p ? null : { id: toId(p), name: p.name, description: p.description, detail: p.detail });
 const mapSubclass = (s: any): SubclassDTO => ({
@@ -68,7 +68,7 @@ const mapClassMeta = (raw: any): ClassMetaDTO => ({
   subclasses: Array.isArray(raw.subclasses) ? raw.subclasses.map(mapSubclass) : [],
 });
 
-/** Normaliza cualquier objeto a BaseStats (evita error de tipos) */
+/** Normaliza a BaseStats */
 function coerceBaseStats(src: any): BaseStats {
   return {
     strength: Number(src?.strength ?? 0),
@@ -85,10 +85,11 @@ function coerceBaseStats(src: any): BaseStats {
 /** GET /character/me */
 export const getMyCharacter: RequestHandler = async (req, res) => {
   try {
-    const userId = req.user?.id; // ✅ ahora existe en el tipo
+    const userId = req.user?.id;
     if (!userId) return res.status(401).json({ message: "No autenticado" });
 
-    const characterDoc = await Character.findOne({ userId });
+    // ⬇️ Traigo también el username del User
+    const characterDoc = await Character.findOne({ userId }).populate({ path: "userId", select: "username" }).exec();
     if (!characterDoc) return res.status(404).json({ message: "Personaje no encontrado" });
 
     const baseClassDoc = await CharacterClass.findById(characterDoc.classId).select("name iconName imageMainClassUrl passiveDefault subclasses baseStats");
@@ -97,37 +98,33 @@ export const getMyCharacter: RequestHandler = async (req, res) => {
     const ch = characterDoc.toObject();
     const baseClassRaw = baseClassDoc.toObject();
 
-    const baseClass: ClassMetaDTO = {
-      id: toId(baseClassRaw),
-      name: baseClassRaw.name,
-      iconName: baseClassRaw.iconName,
-      imageMainClassUrl: baseClassRaw.imageMainClassUrl,
-      passiveDefault: mapPassive(baseClassRaw.passiveDefault)!,
-      subclasses: Array.isArray(baseClassRaw.subclasses) ? baseClassRaw.subclasses.map(mapSubclass) : [],
-    };
+    const baseClass: ClassMetaDTO = mapClassMeta(baseClassRaw);
 
     const subclassIdStr = ch.subclassId ? String(ch.subclassId) : null;
     const selectedSubclass = subclassIdStr && Array.isArray(baseClass.subclasses) ? baseClass.subclasses.find((s) => s.id === subclassIdStr) ?? null : null;
 
     const statsBS: BaseStats = coerceBaseStats(ch.stats);
     const baseBS: BaseStats = coerceBaseStats(baseClassRaw.baseStats);
+
     const availablePoints = computeAvailablePoints(Number(ch.level ?? 1), statsBS, baseBS);
     if (DBG) console.log("[/character/me] availablePoints:", availablePoints);
 
-    // ✅ formateo SOLO para respuesta (no toca DB)
     const combatStatsRounded = roundCombatStatsForResponse(ch.combatStats || ({} as any));
+
+    // ⬇️ username desde el populate (o desde req.user), sin tocar el modelo de Character
+    const usernameFromPopulate = (characterDoc as any)?.userId?.username ?? (req.user as any)?.username ?? "—";
 
     const payload: CharacterResponseDTO = {
       id: String(characterDoc._id),
       userId: ch.userId,
-      username: req.user!.username,
+      username: usernameFromPopulate,
       class: baseClass,
       selectedSubclass,
       level: ch.level,
       experience: ch.experience,
       stats: ch.stats as BaseStats,
       resistances: ch.resistances as Resistances,
-      combatStats: combatStatsRounded, // CombatStats
+      combatStats: combatStatsRounded,
       equipment: ch.equipment,
       inventory: ch.inventory,
       passivesUnlocked: ch.passivesUnlocked,
