@@ -155,6 +155,7 @@ export const simulateCombatPreviewController: RequestHandler = async (req, res) 
 
 /* ---------------- POST /combat/simulate (preview, auth) ---------------- */
 export const simulateCombatController: RequestHandler = async (req, res) => {
+  console.log("hace /combat/simulate backend");
   try {
     const { matchId } = req.body as { matchId?: string };
     if (!matchId || !Types.ObjectId.isValid(matchId)) {
@@ -183,6 +184,7 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
 
 /* ---------------- POST /combat/resolve (auth, PERSISTE) ---------------- */
 export const resolveCombatController: RequestHandler = async (req, res) => {
+  console.log("/combat/resolve..backend");
   try {
     const { matchId } = req.body as { matchId?: string };
     if (!matchId || !Types.ObjectId.isValid(matchId)) {
