@@ -1,400 +1,247 @@
-# ⚔️ NOCTHALIS — Backend RPG (Turnos) · Enemigos · Loot
+# ⚔️ NOCTHALIS — Backend RPG (Turnos)
 
-**Autor:** Pablo Serratti — _Todos los derechos reservados._  
-**Aviso:** Nocthalis es una creación original de **Pablo Serratti**. Se prohíbe la copia o uso comercial sin autorización expresa del autor.
+> API de juego RPG por turnos con **PvP**, **enemigos**, **loot** y progresión.  
+> El motor de combate vive en `src/battleSystem/` (README propio con más detalle).
 
 ---
 
 ## 🧭 Índice
 
-- [Qué es Nocthalis](#qué-es-nocthalis)
+- [TL;DR / Features](#tldr--features)
 - [Stack](#stack)
-- [Estructura de carpetas](#estructura-de-carpetas)
-- [Rutas & Endpoints](#rutas--endpoints)
-- [Controladores](#controladores)
-- [Modelos](#modelos)
-- [Servicios](#servicios)
-- [Seeds y scripts](#seeds-y-scripts)
+- [Estructura](#estructura)
+- [Rutas de API](#rutas-de-api)
+- [Flujo PvP](#flujo-pvp)
 - [Motor de combate](#motor-de-combate)
-- [Loot y rarezas](#loot-y-rarezas)
-- [Diagramas](#diagramas)
-- [Instalación](#instalación)
+- [Modelos (resumen)](#modelos-resumen)
+- [Seeds & Scripts](#seeds--scripts)
+- [Instalación / Dev](#instalación--dev)
 - [FAQ](#faq)
-- [Créditos y derechos](#créditos-y-derechos)
+- [Créditos](#créditos)
 
 ---
 
-## Qué es Nocthalis
+## TL;DR / Features
 
-Backend de **juego RPG por turnos** con:
-
-- Autenticación, creación de personaje por **clase** y **subclase** (a nivel 10).
-- Combate **PvE**: `preview` (sin persistir) y `resolve` (persiste XP/loot).
-- Ecosistema de **enemigos** (tiers y bosses), **drop system** con rarezas y 9 **slots** de equipo.
-- Inventario y equipamiento completos.
+- Registro/Login (JWT).
+- Personaje con **clase** (y **subclase** a nivel 10).
+- **PvP** con _match seed_, timeline, snapshots y **consumo de Stamina** al resolver.
+- **PvE** y _fixtures_ listos para pruebas.
+- **Sistema de ítems** (9 slots), rarezas y catálogo seed.
+- **Enemigos** generados por nivel/arquetipo, _drop profile_ y recompensas.
+- Código 100% **TypeScript** + **Mongoose**.
 
 ---
 
 ## Stack
 
-- **Node.js** + **Express** · **TypeScript**
-- **MongoDB** + **Mongoose**
+- **Node + Express + TypeScript**
+- **MongoDB + Mongoose**
 - **JWT** (middleware `requireAuth`)
-- **Mermaid** (diagramas en este README)
+- Diagramas **Mermaid** en los README
 
 ---
 
-## Estructura de carpetas
+## Estructura
 
 ```
 src/
-├─ classes/
-│  └─ combat/
-│     ├─ PlayerCharacter.ts
-│     ├─ EnemyBot.ts
-│     ├─ CombatManager.ts
-│     └─ Fixtures.ts
+├─ battleSystem/        # Motor de combate (PvP/PvE, armas, RNG, hooks, UI helpers)
+│  ├─ core/             # Manager, snapshot, RNG, weapons, status engine
+│  ├─ pvp/              # pvpRunner (timeline/log/snapshots)
+│  ├─ ui/               # animationScheduler (a partir del timeline)
+│  └─ README.md         # ▶ Detalle técnico del motor (ver)
 │
-├─ config/
-│  └─ db.ts
-│
-├─ controllers/
-│  ├─ auth.controller.ts
-│  ├─ character.controller.ts
-│  ├─ characterEquipment.controller.ts
-│  ├─ chooseClass.controller.ts
-│  ├─ chooseSubClass.controller.ts
-│  ├─ getCharacterClasses.controller.ts
-│  └─ simulateCombat.controller.ts
-│
-├─ interfaces/
-│  ├─ character/
-│  │  ├─ Character.interface.ts
-│  │  └─ CharacterClass.interface.ts
-│  └─ combat/CombatEntity.ts
-│
-├─ middleware/requireAuth.ts
-│
-├─ models/
-│  ├─ User.ts
-│  ├─ Character.ts
-│  ├─ CharacterClass.ts
-│  ├─ Item.ts
-│  └─ Enemy.ts
-│
-├─ routes/
-│  ├─ auth.routes.ts
-│  ├─ character.routes.ts
-│  └─ combat.routes.ts
-│
-├─ scripts/
-│  ├─ generateEnemies.ts
-│  ├─ resetDb.ts
-│  ├─ seedCharacterClasses.ts
-│  ├─ seedItems.ts
-│  └─ testBuilders.ts
-│
-├─ services/
-│  ├─ combat/builders.ts
-│  ├─ combat/simulateCombat.ts
-│  ├─ character.service.ts
-│  ├─ enemy.service.ts
-│  └─ subclass.service.ts
-│
-├─ types/lean.ts
-└─ utils/loot.ts
+├─ controllers/         # Auth, Character, Combat, Arena, Stamina, etc.
+├─ routes/              # /api/* endpoints (auth, character, combat, arena, stamina)
+├─ models/              # User, Character, CharacterClass, Item, Enemy, Match, CombatResult
+├─ scripts/             # resetDb, seeds, generateEnemies, testBuilders
+└─ services/            # progression, stamina, etc.
 ```
 
----
-
-## Rutas & Endpoints
-
-**Auth (`auth.routes.ts`)**
-
-- `POST /auth/register`
-- `POST /auth/login`
-
-**Character (`character.routes.ts`)**
-
-- `GET /character/classes`
-- `POST /character/choose-class` _(auth)_
-- `POST /character/choose-subclass` _(auth)_
-- `GET /character/me` _(auth)_
-- `GET /character/inventory` _(auth)_
-- `POST /character/equip` _(auth)_
-- `POST /character/unequip` _(auth)_
-- `POST /character/use-item` _(auth)_
-- `GET /character/progression` _(auth)_
-
-**Combat (`combat.routes.ts`)**
-
-- `GET /combat/simulate` _(fixtures, sin auth)_
-- `POST /combat/simulate` _(auth, no persiste)_
-- `POST /combat/resolve` _(auth, persiste XP + loot)_
+> 📖 **Motor de combate (documentación ampliada):**  
+> `src/battleSystem/README.md`
 
 ---
 
-## Controladores (resumen)
+## Rutas de API
 
-- **auth.controller.ts** → `register`, `login` (transacción al registrar: User + Character).
-- **character.controller.ts** → `getMyCharacter` (incluye clase y subclase si existe).
-- **characterEquipment.controller.ts** → `getInventory`, `equipItem`, `unequipItem`, `useConsumable`, `getProgression` (valida slots y nivel).
-- **chooseClass.controller.ts** → `chooseClass` (evita duplicados y crea personaje).
-- **chooseSubClass.controller.ts** → `chooseSubclass` (nivel mínimo 10).
-- **getCharacterClasses.controller.ts** → catálogo de clases/subclases.
-- **simulateCombat.controller.ts** → `preview fixtures`, `preview real`, `resolve` (con `grantRewardsAndLoot`).
+Prefijo base en `src/index.ts`:
 
----
+- `/api/auth/*` (auth)
+- `/api/*` (character, combat, arena)
+- `/api/stamina/*` (stamina)
 
-## Modelos
+### Auth
 
-- **User**: `username`, `email`, `password`, `characterClass: ObjectId | null`, `classChosen: boolean` (virtual `id`).
-- **Character**: `userId`, `classId`, `subclassId`, `level`, `experience`, `stats`, `resistances`, `combatStats`, `inventory: string[]`, `equipment` (9 slots). Defaults y virtual `id`.
-- **CharacterClass**: `name`, `description`, `iconName`, `imageMainClassUrl`, `passiveDefault`, `subclasses[]`, `baseStats`, `resistances`, `combatStats` (virtual `id`).
-- **Item**: `type`, `slot`, `rarity`, `stats`, `combatStats`, `levelRequirement`, flags (`isConsumable`, `isUnique`, etc.) (virtual `id`).
-- **Enemy**: `name`, `level`, `tier`, `bossType?`, `stats`, `resistances`, `combatStats`, `xpReward`, `goldReward`, `dropProfile` (normalizaciones y `powerScore`).
+- `POST /api/auth/register`
+- `POST /api/auth/login`
 
----
+### Character
 
-## Servicios
+- `GET  /api/character/classes`
+- `POST /api/character/choose-class` _(auth)_
+- `POST /api/character/choose-subclass` _(auth)_
+- `GET  /api/character/me` _(auth)_
+- `GET  /api/character/progression` _(auth)_
+- `GET  /api/character/inventory` _(auth)_
+- `POST /api/character/equip` _(auth)_
+- `POST /api/character/unequip` _(auth)_
+- `POST /api/character/use-item` _(auth)_
+- `POST /api/character/allocate` _(auth)_
 
-- **combat/builders.ts** → `buildPlayerCharacter(id)`, `buildEnemyById(id)` (completa defaults y devuelve clases POO).
-- **combat/simulateCombat.ts** → adapta al `CombatManager` en modos `fixtures`, `real-preview`, `real`.
-- **character.service.ts** → `findCharacterById`, `grantRewardsAndLoot` (aplica XP/nivel y agrega drops al inventario).
-- **enemy.service.ts** → `findEnemyByIdLean`.
-- **subclass.service.ts** → helpers para recuperar subclases embebidas.
+### Arena (PvP)
 
----
+- `GET  /api/arena/opponents` _(auth)_
+- `POST /api/arena/challenges` _(auth)_ → crea **Match** `pending` con snapshots
 
-## Seeds y scripts
+### Combat
 
-- **generateEnemies.ts**: 50 enemigos exactos (3 por nivel 1..15) + miniboss (4,8,12) + boss (10,15). RNG determinístico, arquetipos, resistencias por banda, `dropProfile` y recompensas.
-- **seedItems.ts**: catálogo por **slot × tramo de nivel × rareza** (Novato 1–5, Veterano 6–10, Maestro 11–15) + consumibles y materiales.
-- **seedCharacterClasses.ts**: Guerrero, Mago, Asesino, Arquero (con pasivas y subclases).
-- **resetDb.ts**: limpia colecciones, sincroniza índices e inserta seeds (bloquea en producción).
-- **testBuilders.ts**: smoke test de builders.
+- `GET  /api/combat/simulate` _(fixtures, sin auth)_
+- `POST /api/combat/simulate` _(auth, preview real; NO persiste)_
+- `POST /api/combat/resolve` _(auth, PERSISTE; cobra Stamina, aplica recompensas)_
+- `GET  /api/combat/results` _(auth)_
+- `GET  /api/combat/results/:id` _(auth)_
 
----
+### Stamina
 
-## Motor de combate
+- `GET  /api/stamina/` _(auth)_ → snapshot de Stamina
+- `POST /api/stamina/use` _(auth)_ → gasto genérico
+- `POST /api/stamina/admin/set` _(auth)_ → ajuste admin
 
-- **PlayerCharacter / EnemyBot** implementan `CombatEntity` (HP y daño directo, método `isAlive`).
-- **CombatManager**:
-  - Daño: `floor(attackPower * (1 - damageReduction/100))`.
-  - Turnos: Player → Enemy (hasta 200 rondas o muerte).
-  - Devuelve `winner`, `turns`, `log[]` legible.
+> **Nota:** el costo actual de **PvP resolve** está en el controlador: `STAMINA_COST_PVP = 10`.
 
 ---
 
-## Loot y rarezas
-
-- Cada enemigo tiene `dropProfile` con:
-  - `rolls`, `rarityChances`, `slotWeights`, `guaranteedMinRarity?`.
-- Distribución típica no-boss: common 60–70, uncommon 25–35, rare 5–12, epic 0–6, legendary 0–1.
-- Boss ajusta hacia `rare/epic/legendary` y sube `rolls`.
-- **utils/loot.ts (stub actual)**: toma 0–2 ítems al azar del catálogo (útil para pruebas).
-
-# Resistencias (plan)
-
-- **Escala:** 0–100.
-- **Proc de estado:** `chanceEfectiva = chanceBase * (1 - res/100)`.
-- **Reducción de crítico:**
-  - `criticalChanceReduction` resta a la CHANCE de crítico del atacante.
-  - `criticalDamageReduction` resta al BONUS de daño crítico del atacante (en %).
-- **Orden de cálculo (combate):**
-  1. base dmg → 2) crit → 3) mitigación por defensa → 4) block → 5) `damageReduction` → 6) **hooks** → 7) varianza.
-  2. Aplicar estados (futuro): usar resistencias para el proc.
-- **Eventos reservados (futuro estados):**
-  - `player:burn`, `enemy:burn`
-  - `player:freeze`, `enemy:freeze`
-  - `player:shock`, `enemy:shock`
-  - `player:poison`, `enemy:poison`
-  - `player:sleep`, `enemy:sleep`
-  - `player:stun`, `enemy:stun`
-  - `player:bleed`, `enemy:bleed`
-  - `player:curse`, `enemy:curse`
-  - `player:knockback`, `enemy:knockback`
-  - `resist:*` (si el objetivo resiste el estado)
-
----
-
-## Diagramas
-
-### 1) Arquitectura (Rutas → Controladores → Servicios)
-
-```mermaid
-flowchart LR
-  subgraph Routes
-    RA[auth.routes]
-    RC[character.routes]
-    RB[combat.routes]
-  end
-
-  subgraph Controllers
-    A1[auth.controller]
-    C1[character.controller]
-    C2[chooseClass.controller]
-    C3[chooseSubClass.controller]
-    C4[characterEquipment.controller]
-    S1[simulateCombat.controller]
-  end
-
-  subgraph Services
-    B1[combat/builders]
-    B2[combat/simulateCombat]
-    B3[character.service]
-    B4[enemy.service]
-    B5[utils/loot]
-  end
-
-  RA --> A1
-  RC --> C1
-  RC --> C2
-  RC --> C3
-  RC --> C4
-  RB --> S1
-
-  S1 --> B1
-  S1 --> B2
-  S1 --> B3
-  S1 --> B4
-  S1 --> B5
-```
-
-### 2) Auth + Registro / Login
-
-```mermaid
-sequenceDiagram
-  participant Client
-  participant API as API
-  participant Auth as AuthCtrl
-  participant U as User
-  participant Ch as Character
-  participant Cl as CharacterClass
-
-  Client->>API: POST auth/register
-  API->>Auth: register
-  Auth->>Cl: findById class
-  Auth->>U: create user
-  Auth->>Ch: create character
-  Auth-->>Client: 201 token y datos
-
-  Client->>API: POST auth/login
-  API->>Auth: login
-  Auth-->>Client: 200 token y datos
-```
-
-### 3) PvE: Simulación vs Resolución
-
-```mermaid
-flowchart TB
-  A[POST combat/simulate · auth] --> B[simulateCombatController]
-  B --> C[buildPlayerCharacter]
-  B --> D[buildEnemyById]
-  C --> E[simulateCombat]
-  D --> E
-  E --> F[winner y log]
-
-  G[POST combat/resolve · auth] --> H[resolveCombatController]
-  H --> E2[simulateCombat]
-  E2 --> I[grantRewardsAndLoot]
-  I --> J[persistir XP · inventario]
-```
-
-### 4) Inventario y Equipo
+## Flujo PvP
 
 ```mermaid
 sequenceDiagram
   participant Client
   participant API
-  participant EQ as characterEquipment
-  participant DB as Models
+  participant Arena as ArenaCtrl
+  participant Combat as CombatCtrl
+  participant DB as Mongo
 
-  Client->>API: GET character/inventory
-  API->>EQ: getInventory
-  EQ->>DB: Character + Item
-  EQ-->>Client: equipment e inventory
+  Client->>API: GET /api/arena/opponents (auth)
+  API->>Arena: getArenaOpponents
+  Arena->>DB: Character (+ clase)
+  Arena-->>Client: lista rivales
 
-  Client->>API: POST character/equip
-  API->>EQ: equipItem
-  EQ-->>Client: equipment actualizado
-```
+  Client->>API: POST /api/arena/challenges { opponentId }
+  API->>Arena: postArenaChallenge
+  Arena->>DB: Character atacante/defensor + Class
+  Arena->>DB: buildCharacterSnapshot()
+  Arena->>DB: Match.create(pending, seed, snapshots)
+  Arena-->>Client: matchId, seed, status
 
-### 5) Relación de Modelos
+  Client->>API: POST /api/combat/simulate { matchId } (auth)
+  API->>Combat: simulateCombat (NO persiste)
+  Combat-->>Client: outcome, timeline, log, snapshots
 
-```mermaid
-classDiagram
-  class User { username; email; password; characterClass; classChosen }
-  class Character { userId; classId; subclassId; level; experience; stats; resistances; combatStats; inventory; equipment }
-  class CharacterClass { name; passiveDefault; subclasses; baseStats; resistances; combatStats }
-  class Item { name; type; slot; rarity; levelRequirement; stats; combatStats; flags }
-  class Enemy { name; level; tier; bossType; stats; resistances; combatStats; rewards; dropProfile }
-
-  User --> Character : 1 - 1
-  Character --> CharacterClass : many - 1
-  Character "0..*" --> "0..*" Item : inventory ids
-```
-
-### 6) Pipeline de Loot
-
-```mermaid
-flowchart LR
-  DP[dropProfile] --> R1[decidir rareza]
-  DP --> R2[decidir slot]
-  R1 --> P1[buscar item por rareza y slot]
-  R2 --> P1
-  P1 --> F{encontrado}
-  F -- si --> OUT[drop al inventario]
-  F -- no --> FB[fallbacks y consumibles]
-  FB --> OUT
+  Client->>API: POST /api/combat/resolve { matchId } (auth)
+  API->>Combat: resolveCombat (cobra Stamina)
+  Combat->>DB: runPvp → normaliza timeline → aplica rewards
+  Combat->>DB: Match.update(resolved)
+  Combat-->>Client: outcome, rewards, staminaAfter, timeline
 ```
 
 ---
 
-## Instalación
+## Motor de combate
 
-1. **Instalar dependencias**
-   ```bash
-   npm install
-   ```
-2. **Configurar `.env`**
-   ```
-   PORT=3030
-   JWT_SECRET=clave
-   MONGO_URI=mongodb+srv://...
-   NODE_ENV=development
-   ```
-3. **Poblar base (DEV)**
-   ```bash
-   npm run reset-db
-   ```
-4. **Correr en desarrollo**
-   ```bash
-   npm run dev
-   ```
+- **Runner PvP** (`src/battleSystem/pvp/pvpRunner.ts`)
+  - Soporta **passive_proc** y **ultimate_cast** (events en timeline).
+  - **Tags** (arma usada, crit, miss, block, pasiva/ultimate, hooks de clase).
+  - **Snapshots** por impacto (para UI/animaciones).
+  - **Sin arma**: se tolera; el runner usa `ensureWeaponOrDefault` (puños o `defaultWeapon` de la clase).
+- **Animation scheduler** (`src/battleSystem/ui/animationScheduler.ts`)  
+  Genera eventos con timestamps a partir del timeline (`windup`, `impact_*`, `passive_proc`, `ultimate_cast`).
+
+> Detalles, tipos y ejemplos → ver **`src/battleSystem/README.md`**.
+
+---
+
+## Modelos (resumen)
+
+```mermaid
+classDiagram
+  class User { username; email; password }
+  class Character { userId; classId; subclassId; level; experience; stats; resistances; combatStats; equipment; inventory }
+  class CharacterClass { name; passiveDefaultSkill; ultimateSkill; primaryWeapons; defaultWeapon }
+  class Item { slug; type; slot; rarity; weapon?; stats; combatStats; levelRequirement }
+  class Enemy { name; level; tier; stats; resistances; combatStats; xpReward; goldReward; dropProfile }
+  class Match { attackerUserId; defenderUserId; seed; attackerSnapshot; defenderSnapshot; status; outcome; timeline }
+  class CombatResult { matchId; outcome; rewards; log; timeline }
+
+  User --> Character : 1 - 1
+  Character --> CharacterClass : many - 1
+  Character "0..*" --> "0..*" Item : inventory ids
+  Match --> Character : snapshots (denormalizados)
+```
+
+---
+
+## Seeds & Scripts
+
+- `npm run reset-db` → limpia colecciones, sincroniza índices, **inserta**:
+  - **Clases** (`seedCharacterClasses.ts`) con pasiva/ultimate/armas primarias y `defaultWeapon`.
+  - **Ítems** (`seedItems.ts`) por **slot × tramo de nivel × rareza** (+ consumibles/materiales).
+  - **Enemigos** (`generateEnemies.ts`): 50 exactos (3×nivel 1..15 + miniboss 4/8/12 + boss 10/15).
+- `scripts/testBuilders.ts` → smoke test de _builders_ (IDs opcionales).
+
+---
+
+## Instalación / Dev
+
+1. Dependencias
+
+```bash
+npm install
+```
+
+2. `.env`
+
+```
+PORT=3030
+JWT_SECRET=supersecreto
+MONGO_URI=mongodb+srv://...
+NODE_ENV=development
+```
+
+3. Poblar base (DEV)
+
+```bash
+npm run reset-db
+```
+
+4. Levantar API
+
+```bash
+npm run dev
+```
 
 ---
 
 ## FAQ
 
-**¿Qué diferencia hay entre simulate y resolve?**  
-`simulate` no persiste; `resolve` guarda XP y loot.
+**¿Simulate vs Resolve?**  
+`simulate` no persiste (preview). `resolve` cobra **Stamina**, guarda **Match** resuelto, aplica XP/oro/honor.
 
-**¿Cuándo puedo elegir subclase?**  
-A partir del **nivel 10**.
+**¿Y si el personaje no tiene arma?**  
+El runner usa **arma por defecto** de la clase o **puños**, sin romper el combate.
 
-**No me deja equipar un ítem.**  
-Revisa `levelRequirement` y que el `slot` sea válido para ese ítem.
+**¿Subclases?**  
+Disponibles al **nivel 10** (endpoint `/character/choose-subclass`).
 
-**¿De dónde salen los drops?**  
-De `dropProfile` del enemigo. El `roller` actual es un **stub** que devuelve hasta 2 ítems aleatorios del catálogo.
-
-**¿Es seguro ejecutar resetDb?**  
-Solo en **desarrollo**: en producción aborta por seguridad.
+**¿Estados (burn/stun/poison)?**  
+Hay **engine** listo (`StatusEngine`) y eventos reservados; los proc/resistencias se integran progresivamente.
 
 ---
 
-## Créditos y derechos
+## Créditos
 
-**Nocthalis** fue creado por **Pablo Serratti**.  
-© 2025 Pablo Serratti. _Todos los derechos reservados._
+**Nocthalis** — © 2025 Pablo Serratti.  
+Motor y backend en TypeScript/Mongo.
+
+> Documentación ampliada del combate: **`src/battleSystem/README.md`**.
