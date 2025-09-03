@@ -1,8 +1,9 @@
+// src/battleSystem/factories/buildCombatEntities.ts
 import { Types } from "mongoose";
 import { Character } from "../../models/Character";
 import { Enemy } from "../../models/Enemy";
-import { PlayerCharacter } from "../../classes/combat/PlayerCharacter";
-import { EnemyBot } from "../../classes/combat/EnemyBot";
+import { PlayerCharacter } from "../entities/PlayerCharacter";
+import { EnemyBot } from "../entities/EnemyBot";
 import type { CharacterForBattleLean, EnemyForBattleLean, Stats, Resistances, CombatStats } from "../../types/lean";
 
 const DEF_STATS: Stats = {
@@ -13,9 +14,8 @@ const DEF_STATS: Stats = {
   physicalDefense: 0,
   magicalDefense: 0,
   luck: 0,
-  agility: 0,
   endurance: 0,
-  wisdom: 0,
+  fate: 0, // ✅ faltaba este campo requerido por Stats
 };
 
 const DEF_RES: Resistances = {
@@ -39,7 +39,6 @@ const DEF_RES: Resistances = {
 
 const DEF_COMBAT: CombatStats = {
   maxHP: 100,
-  maxMP: 20,
   attackPower: 10,
   magicPower: 5,
   criticalChance: 5,
@@ -49,7 +48,6 @@ const DEF_COMBAT: CombatStats = {
   blockChance: 0,
   blockValue: 0,
   lifeSteal: 0,
-  manaSteal: 0,
   damageReduction: 0,
   movementSpeed: 5,
 };
