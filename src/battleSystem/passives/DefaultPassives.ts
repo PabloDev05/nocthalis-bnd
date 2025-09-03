@@ -1,50 +1,74 @@
+// src/battleSystem/passives/DefaultPassives.ts
+
+/**
+ * Tabla de "pasivas por defecto" por CLASE.
+ * Son NUMÉRICAS y simples (no procs, no duración). Útiles para aplicar
+ * modificadores planos a stats/combat ANTES del snapshot (fuera del motor).
+ *
+ * 👉 El motor de combate (pvpRunner/CombatManager) NO usa esto directamente.
+ *    Sirve como fuente de verdad opcional para builders/cálculo previo.
+ */
+
 export type PassiveNumbers = {
-  // porcentajes enteros (p.ej. 30 => 30%)
-  magicToDamagePct?: number; // Convierte % de magicPower a daño físico/base
-  critChancePct?: number; // +X% prob. de crítico
-  critDamagePct?: number; // +X% daño crítico
+  // Porcentajes enteros (p.ej. 30 => 30%)
+  magicToDamagePct?: number; // Convierte % de magicPower a daño base simple
+  critChancePct?: number; // +X% probabilidad de crítico
+  critDamagePct?: number; // +X% bonus de daño crítico
   damageReductionPct?: number; // +X% reducción de daño
-  blockAddPct?: number; // +X% prob. de bloqueo
-  rampPerHitPct?: number; // +X% por golpe
+  blockAddPct?: number; // +X% probabilidad de bloqueo
+  rampPerHitPct?: number; // +X% por golpe (acumulativo)
   rampMaxPct?: number; // tope del ramp
+  evasionPct?: number; // +X% evasión
+  attackSpeedPct?: number; // +X% velocidad de ataque
+  attackPowerFlat?: number; // +X AP plano
+  magicPowerFlat?: number; // +X MP plano
 };
 
 export const DEFAULT_PASSIVES: Record<
-  "Guerrero" | "Mago" | "Asesino" | "Arquero",
+  "Vampire" | "Werewolf" | "Necromancer" | "Revenant" | "Exorcist",
   {
     name: string;
-    description: string; // que coincida con los efectos
+    description: string;
     effects: PassiveNumbers;
   }
 > = {
-  Guerrero: {
-    name: "Guardia de Acero",
-    description: "Daño recibido -5% y +3% prob. de bloqueo.",
-    effects: { damageReductionPct: 5, blockAddPct: 3 },
+  Vampire: {
+    name: "Crimson Grace",
+    description: "+2% Evasión y +5% Chance de Crítico.",
+    effects: { evasionPct: 2, critChancePct: 5 },
   },
-  Mago: {
-    name: "Infusión Arcana",
-    description: "Convierte +30% del Poder Mágico a daño.",
+  Werewolf: {
+    name: "Predatory Hide",
+    description: "Daño recibido -5% y +2% Velocidad de Ataque.",
+    effects: { damageReductionPct: 5, attackSpeedPct: 2 },
+  },
+  Necromancer: {
+    name: "Umbral Infusion",
+    description: "Convierte +30% del Poder Mágico a daño base.",
     effects: { magicToDamagePct: 30 },
   },
-  Asesino: {
-    name: "Golpe Letal",
-    description: "+5% prob. de crítico y +20% daño crítico.",
-    effects: { critChancePct: 5, critDamagePct: 20 },
+  Revenant: {
+    name: "Deadeye",
+    description: "+6% Chance de Crítico y +10% Daño Crítico.",
+    effects: { critChancePct: 6, critDamagePct: 10 },
   },
-  Arquero: {
-    name: "Ojo del Águila",
-    description: "+1% de daño por golpe (máx. +5%).",
-    effects: { rampPerHitPct: 1, rampMaxPct: 5 },
+  Exorcist: {
+    name: "Iron Faith",
+    description: "+3% Bloqueo y +5% Reducción de Daño.",
+    effects: { blockAddPct: 3, damageReductionPct: 5 },
   },
 };
 
-// Helper: resolver por nombre libre de clase
+/**
+ * Helper: resuelve efectos por nombre de clase (string libre).
+ * Si no matchea, retorna objeto vacío.
+ */
 export function effectsForClassName(className?: string): PassiveNumbers {
-  const c = (className || "").toLowerCase();
-  if (c.includes("guerrero")) return DEFAULT_PASSIVES.Guerrero.effects;
-  if (c.includes("mago")) return DEFAULT_PASSIVES.Mago.effects;
-  if (c.includes("asesino")) return DEFAULT_PASSIVES.Asesino.effects;
-  if (c.includes("arquero")) return DEFAULT_PASSIVES.Arquero.effects;
+  const c = String(className ?? "").toLowerCase();
+  if (c.includes("vampire")) return DEFAULT_PASSIVES.Vampire.effects;
+  if (c.includes("werewolf")) return DEFAULT_PASSIVES.Werewolf.effects;
+  if (c.includes("necromancer")) return DEFAULT_PASSIVES.Necromancer.effects;
+  if (c.includes("revenant")) return DEFAULT_PASSIVES.Revenant.effects;
+  if (c.includes("exorcist")) return DEFAULT_PASSIVES.Exorcist.effects;
   return {};
 }

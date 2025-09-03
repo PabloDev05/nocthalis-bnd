@@ -9,13 +9,9 @@ export type BossType = "miniboss" | "boss" | "world";
 export type RarityKey = "common" | "uncommon" | "rare" | "epic" | "legendary";
 
 export interface DropProfile {
-  /** Cantidad de tiradas de drop que se realizarán para este enemigo */
   rolls: number;
-  /** Probabilidades por rareza (valores que suman ~100) */
   rarityChances: Record<RarityKey, number>;
-  /** Pesos por slot. Se combinan con preferencias de clase del jugador en el roller */
   slotWeights: Partial<Record<SlotKey, number>>;
-  /** Para (mini)bosses: garantiza al menos esta rareza en UNA de las tiradas */
   guaranteedMinRarity?: "uncommon" | "rare" | "epic";
 }
 
@@ -44,8 +40,8 @@ export interface EnemyDoc extends Document {
   immunities?: string[];
 
   // Ajustes de balance (opcional)
-  lootTierMultiplier?: number; // multiplica el resultado de rarezas (p. ej. 1.1 = +10% hacia arriba)
-  xpMultiplier?: number; // multiplica xpReward final
+  lootTierMultiplier?: number;
+  xpMultiplier?: number;
 
   createdAt: Date;
   updatedAt: Date;
@@ -62,7 +58,14 @@ function clamp(n: number, min: number, max: number) {
 }
 
 function normalizeRarity(chances: Record<RarityKey, number>) {
-  const safe = { ...chances, common: chances?.common ?? 0, uncommon: chances?.uncommon ?? 0, rare: chances?.rare ?? 0, epic: chances?.epic ?? 0, legendary: chances?.legendary ?? 0 };
+  const safe = {
+    ...chances,
+    common: chances?.common ?? 0,
+    uncommon: chances?.uncommon ?? 0,
+    rare: chances?.rare ?? 0,
+    epic: chances?.epic ?? 0,
+    legendary: chances?.legendary ?? 0,
+  };
   const sum = Object.values(safe).reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0) || 1;
   const out: Record<RarityKey, number> = {
     common: Math.round((safe.common / sum) * 100),
@@ -71,7 +74,6 @@ function normalizeRarity(chances: Record<RarityKey, number>) {
     epic: Math.round((safe.epic / sum) * 100),
     legendary: Math.round((safe.legendary / sum) * 100),
   };
-  // ajustar redondeo final para sumar 100
   const diff = 100 - Object.values(out).reduce((a, b) => a + b, 0);
   if (diff !== 0) out.common = clamp(out.common + diff, 0, 100);
   return out;
@@ -90,7 +92,6 @@ function fillSlotWeights(weights: Partial<Record<SlotKey, number>>) {
     amulet: 1,
   };
   const merged = { ...base, ...(weights || {}) };
-  // evitar todos ceros
   const sum = SLOT_KEYS.reduce((a, k) => a + (Number(merged[k]) || 0), 0);
   if (sum <= 0) return base;
   return merged;
@@ -126,11 +127,12 @@ const DropProfileSchema = new Schema<DropProfile>(
 // ---- Esquema principal ----
 const EnemySchema = new Schema<EnemyDoc>(
   {
-    name: { type: String, required: true, index: true },
-    level: { type: Number, required: true, min: 1, index: true },
-    tier: { type: String, enum: ["common", "elite", "rare"], default: "common", index: true },
+    // ⚠️ SIN index:true en campos; los índices se declaran abajo
+    name: { type: String, required: true },
+    level: { type: Number, required: true, min: 1 },
+    tier: { type: String, enum: ["common", "elite", "rare"], default: "common" },
 
-    // BaseStats con defaults
+    // BaseStats con defaults (incluye 'fate')
     stats: {
       strength: { type: Number, default: 0 },
       dexterity: { type: Number, default: 0 },
@@ -140,6 +142,7 @@ const EnemySchema = new Schema<EnemyDoc>(
       magicalDefense: { type: Number, default: 0 },
       luck: { type: Number, default: 0 },
       endurance: { type: Number, default: 0 },
+      fate: { type: Number, default: 0 },
     },
 
     // Resistencias con defaults
@@ -181,13 +184,13 @@ const EnemySchema = new Schema<EnemyDoc>(
     imageUrl: { type: String, default: "" },
 
     // Recompensas y drop
-    xpReward: { type: Number, default: 0, min: 0, max: 1_000_000, index: true },
+    xpReward: { type: Number, default: 0, min: 0, max: 1_000_000 },
     goldReward: { type: Number, default: 0, min: 0, max: 1_000_000 },
     dropProfile: { type: DropProfileSchema, default: () => ({}) },
 
     // Boss flags
-    isBoss: { type: Boolean, default: false, index: true },
-    bossType: { type: String, enum: ["miniboss", "boss", "world"], default: null, index: true },
+    isBoss: { type: Boolean, default: false },
+    bossType: { type: String, enum: ["miniboss", "boss", "world"], default: null },
 
     // Extras
     mechanics: { type: [String], default: [] },
@@ -210,22 +213,27 @@ const EnemySchema = new Schema<EnemyDoc>(
   }
 );
 
+// --------- Índices (centralizados) ---------
+EnemySchema.index({ name: 1 }); // búsqueda por nombre
+EnemySchema.index({ level: 1 });
+EnemySchema.index({ tier: 1 });
+EnemySchema.index({ isBoss: 1 });
+EnemySchema.index({ bossType: 1 });
+EnemySchema.index({ xpReward: 1 });
+
 // Índice compuesto único para evitar colisiones entre seeds generados
 EnemySchema.index({ name: 1, level: 1, tier: 1, bossType: 1 }, { unique: true });
 
 // --- Hooks opcionales de robustez ---
 EnemySchema.pre("save", function (next) {
-  // bossType coherente con isBoss
   if (!this.isBoss) this.bossType = null;
 
-  // normalizar chances y slotWeights
   if (this.dropProfile) {
     this.dropProfile.rarityChances = normalizeRarity(this.dropProfile.rarityChances || ({} as any));
     this.dropProfile.slotWeights = fillSlotWeights(this.dropProfile.slotWeights || {});
     this.dropProfile.rolls = clamp(this.dropProfile.rolls ?? 1, 0, 10);
   }
 
-  // clamp rewards y multiplicadores
   this.xpReward = clamp(this.xpReward ?? 0, 0, 1_000_000);
   this.goldReward = clamp(this.goldReward ?? 0, 0, 1_000_000);
   this.lootTierMultiplier = clamp(this.lootTierMultiplier ?? 1, 0, 10);
@@ -238,9 +246,12 @@ EnemySchema.pre("save", function (next) {
 EnemySchema.virtual("powerScore").get(function (this: EnemyDoc) {
   const s = this.stats || ({} as any);
   const c = this.combatStats || ({} as any);
-  // fórmula muy simple; ajustá a gusto
-  return (s.strength + s.dexterity + s.intelligence + s.vitality + s.physicalDefense + s.magicalDefense) * 1 + (c.attackPower + c.magicPower) * 1.5 + c.maxHP * 0.2;
+  const baseBlock = (s.strength + s.dexterity + s.intelligence + s.vitality + s.physicalDefense + s.magicalDefense + s.endurance + s.luck + (s.fate ?? 0)) * 1.0;
+  const offensive = (c.attackPower + c.magicPower) * 1.5;
+  const hpWeight = (c.maxHP || 0) * 0.2;
+  return baseBlock + offensive + hpWeight;
 });
 
 export const Enemy = (mongoose.models.Enemy as mongoose.Model<EnemyDoc>) || mongoose.model<EnemyDoc>("Enemy", EnemySchema);
+
 export type { EnemyDoc as TEnemyDoc };

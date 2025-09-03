@@ -1,8 +1,10 @@
 // src/types/lean.ts
 import { Types } from "mongoose";
-import type { PlayerClassName } from "../utils/loot";
 
-// --- Bloques de stats usados por el motor ---
+/* ────────────────────────────────────────────────────────────
+ * Bloques de stats usados por el motor (enteros)
+ * ──────────────────────────────────────────────────────────── */
+
 export type Stats = {
   strength: number;
   dexterity: number;
@@ -12,6 +14,8 @@ export type Stats = {
   magicalDefense: number;
   luck: number;
   endurance: number;
+  /** NEW: probabilidad de procs (separado de luck) */
+  fate: number;
 };
 
 export type Resistances = {
@@ -48,47 +52,69 @@ export type CombatStats = {
   movementSpeed: number;
 };
 
-// --- Clases / Personajes base ---
+/* ────────────────────────────────────────────────────────────
+ * Clases / Personajes base (lean)
+ * ──────────────────────────────────────────────────────────── */
+
+/** Clase mínima populada (evita acoplar a un union de nombres) */
 export type ClassLean = {
   _id: Types.ObjectId;
-  name: PlayerClassName;
+  name: string; // p.ej. "Vampire", "Werewolf", etc.
 };
 
 export type CharacterLean = {
   _id: Types.ObjectId;
   userId: Types.ObjectId;
+  /** Puede venir como ObjectId o como objeto poblado */
   classId: Types.ObjectId | ClassLean;
+
+  /** Progresión */
   level: number;
   experience: number;
+
+  /** Colección ligera (ids de ítems) */
   inventory: string[];
+
+  /** Opcionalmente podrías tener: */
+  // subclassId?: Types.ObjectId | null;
+  // name?: string;
+  // username?: string;
 };
 
-// Para el builder: lo que realmente necesita
+/** Para el builder de combate: versión enriquecida */
 export type CharacterForBattleLean = CharacterLean & {
   stats: Partial<Stats>;
   resistances: Partial<Resistances>;
   combatStats: Partial<CombatStats>;
-  // por si guardaste nombre/username en el doc
   name?: string;
   username?: string;
 };
 
-// --- Enemigos ---
+/* ────────────────────────────────────────────────────────────
+ * Enemigos
+ * ──────────────────────────────────────────────────────────── */
+
 export type EnemyLean = {
   _id: Types.ObjectId;
   name: string;
   level: number;
   tier: "common" | "elite" | "rare";
   bossType?: "miniboss" | "boss" | "world" | null;
+
   xpReward: number;
   goldReward: number;
   dropProfile: unknown;
+
+  /** Campos que solemos proyectar en servicios (pueden ser parciales) */
+  stats?: Partial<Stats>;
+  resistances?: Partial<Resistances>;
+  combatStats?: Partial<CombatStats>;
 };
 
+/** Lo mismo pero marcado explícitamente para el motor */
 export type EnemyForBattleLean = EnemyLean & {
   stats: Partial<Stats>;
   resistances: Partial<Resistances>;
   combatStats: Partial<CombatStats>;
-  // util para JSON
-  id?: string;
+  id?: string; // útil para JSON serializado
 };

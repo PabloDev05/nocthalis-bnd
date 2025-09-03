@@ -1,9 +1,15 @@
+// src/controllers/simulateCombat.controller.ts
+/* eslint-disable no-console */
 import type { RequestHandler } from "express";
 import { Types } from "mongoose";
 import { Match } from "../models/Match";
 import { Character } from "../models/Character";
 import { runPvp } from "../battleSystem";
 import { computeProgression } from "../services/progression.service";
+import { spendStamina, getStaminaByUserId } from "../services/stamina.service";
+
+/** Costo de stamina por pelea PvP (se cobra al resolver) */
+const STAMINA_COST_PVP = 10;
 
 function mapOutcomeForMatch(outcome: "win" | "lose" | "draw") {
   return outcome === "win" ? "attacker" : outcome === "lose" ? "defender" : "draw";
@@ -82,19 +88,26 @@ type TLIn =
       turn?: number;
       source?: "attacker" | "defender";
       actor?: "attacker" | "defender";
-      event?: "hit" | "crit" | "block" | "miss";
+      event?: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast";
       damage?: number;
       attackerHP?: number;
       defenderHP?: number;
       playerHP?: number;
       enemyHP?: number;
       events?: string[];
+      ability?: {
+        kind?: "passive" | "ultimate";
+        name?: string;
+        id?: string;
+        durationTurns?: number;
+      };
+      tags?: string[];
     }
   | any;
 
 const toInt = (v: any, def = 0) => {
   const n = Number(v);
-  return Number.isFinite(n) ? Math.floor(n) : def;
+  return Number.isFinite(n) ? Math.floor(n) : (def as any);
 };
 
 function normalizeTimeline(items: TLIn[] | undefined | null) {
@@ -102,8 +115,8 @@ function normalizeTimeline(items: TLIn[] | undefined | null) {
   return arr.map((it, idx) => {
     const source = (it.source ?? it.actor ?? "attacker") as "attacker" | "defender";
     const turn = toInt(it.turn ?? idx + 1, idx + 1);
-    const damage = Math.max(0, toInt(it.damage, 0));
 
+    // HPs: aceptar player/enemy (legacy) o attacker/defender directos
     let attackerHP = toInt(it.attackerHP, NaN);
     let defenderHP = toInt(it.defenderHP, NaN);
     if (!Number.isFinite(attackerHP) || !Number.isFinite(defenderHP)) {
@@ -120,12 +133,49 @@ function normalizeTimeline(items: TLIn[] | undefined | null) {
     attackerHP = Math.max(0, attackerHP);
     defenderHP = Math.max(0, defenderHP);
 
-    const event = (it.event as "hit" | "crit" | "block" | "miss") ?? (damage > 0 ? "hit" : "miss");
-    return { turn, source, event, damage, attackerHP, defenderHP };
+    const ev = it.event as TLIn["event"];
+    const tags = Array.isArray(it.tags) ? it.tags.slice(0, 8).map(String) : [];
+
+    // Eventos de habilidad: preservar metadatos y normalizar damage
+    if (ev === "passive_proc" || ev === "ultimate_cast") {
+      const hasDur = typeof it.ability?.durationTurns === "number";
+      return {
+        turn,
+        source,
+        event: ev,
+        damage: Math.max(0, toInt(it.damage, 0)),
+        attackerHP,
+        defenderHP,
+        ability: it.ability
+          ? {
+              kind: it.ability.kind === "ultimate" ? "ultimate" : "passive",
+              name: it.ability.name,
+              id: it.ability.id,
+              durationTurns: hasDur ? toInt(it.ability!.durationTurns, 0) : undefined,
+            }
+          : undefined,
+        tags,
+      };
+    }
+
+    // Golpeo “normal”
+    const event: "hit" | "crit" | "block" | "miss" = (ev as any) ?? (toInt(it.damage, 0) > 0 ? "hit" : "miss");
+
+    const damage = Math.max(0, toInt(it.damage, 0));
+
+    return {
+      turn,
+      source,
+      event,
+      damage,
+      attackerHP,
+      defenderHP,
+      // ability/tags no aplican aquí
+    };
   });
 }
 
-/* ---------------- GET /combat/simulate (preview) ---------------- */
+/* ---------------- GET /combat/simulate (preview público) ---------------- */
 export const simulateCombatPreviewController: RequestHandler = async (req, res) => {
   try {
     const matchId = String(req.query.matchId || "");
@@ -182,10 +232,13 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
   }
 };
 
-/* ---------------- POST /combat/resolve (auth, PERSISTE) ---------------- */
+/* ---------------- POST /combat/resolve (auth, PERSISTE + cobra stamina) ---------------- */
 export const resolveCombatController: RequestHandler = async (req, res) => {
   console.log("/combat/resolve..backend");
   try {
+    const callerUserId = req.user?.id;
+    if (!callerUserId) return res.status(401).json({ ok: false, message: "No autenticado" });
+
     const { matchId } = req.body as { matchId?: string };
     if (!matchId || !Types.ObjectId.isValid(matchId)) {
       return res.status(400).json({ ok: false, message: "matchId inválido" });
@@ -196,6 +249,7 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
 
     const mAny = match as any;
 
+    // Ya resuelto → devolvemos lo persistido
     if (mAny.status === "resolved") {
       const storedOutcome = (mAny.outcome ?? "draw") as "attacker" | "defender" | "draw";
       const outcomeForAttacker: "win" | "lose" | "draw" = storedOutcome === "attacker" ? "win" : storedOutcome === "defender" ? "lose" : "draw";
@@ -211,6 +265,20 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
       });
     }
 
+    // 💥 Cobro stamina SOLO al usuario que ejecuta el resolve (atacante normalmente)
+    const spent = await spendStamina(callerUserId, STAMINA_COST_PVP);
+    if (!spent.ok) {
+      const snap = await getStaminaByUserId(callerUserId).catch(() => null);
+      return res.status(400).json({
+        ok: false,
+        message: "Stamina insuficiente",
+        required: STAMINA_COST_PVP,
+        stamina: snap || undefined,
+        reason: (spent as any).reason,
+      });
+    }
+
+    // Simulación y persistencia
     const { outcome, timeline, log, snapshots } = runPvp({
       attackerSnapshot: mAny.attackerSnapshot,
       defenderSnapshot: mAny.defenderSnapshot,
@@ -250,6 +318,7 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
       timeline: timelineNorm,
       snapshots,
       log,
+      staminaAfter: spent.after, // snapshot de stamina luego de cobrar
     });
   } catch (err: any) {
     console.error("POST /combat/resolve error:", err?.name, err?.message);

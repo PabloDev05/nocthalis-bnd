@@ -1,102 +1,141 @@
-// Paquetes de pasivas por CLASE: lógica runtime (por ronda/golpe).
+// src/battleSystem/passives/ClassPacks.ts
+// Paquetes de pasivas por CLASE (Vampire, Werewolf, Necromancer, Revenant, Exorcist)
+// En esta versión NO modifican números; solo emiten tags para efectos/animaciones/logs.
+// Así evitamos duplicar la lógica Fate-driven de passiveDefaultSkill/ultimate del runner.
+
+import type { ClassPassivePack, PassiveHooks, SideKey } from "./types";
+
 const DBG = process.env.DEBUG_COMBAT === "1";
 
-import type { PassiveHooks } from "../passives/types";
-
-export type ClassPassivePack = {
-  name: string;
-  hooks?: PassiveHooks | null;
-};
-
-/**
- * Mago – Llama Interna
- * +2% daño por ronda (máx 10%). Emite evento para animación.
- */
-function mageInnerFlamePack(): ClassPassivePack {
-  const hooks: PassiveHooks = {
-    onRoundStart({ state, side }) {
-      state.innerFlameStacks = Math.min(5, Number(state.innerFlameStacks ?? 0) + 1);
-      if (DBG) console.log(`[PASSIVE][${side}] Llama Interna stacks =`, state.innerFlameStacks);
-    },
-    onModifyOutgoing({ dmg, state, side, pushEvent, self }) {
-      const className = (self as any)?.className || null;
-      if (className !== "Mago") return;
-      const stacks = Math.max(0, Math.min(5, Number(state.innerFlameStacks ?? 0)));
-      if (stacks > 0) {
-        const mult = 1 + stacks * 0.02;
-        const boosted = dmg * mult;
-        pushEvent(`${side}:innerFlame`);
-        if (DBG) console.log(`[PASSIVE][${side}] Llama Interna +${((mult - 1) * 100).toFixed(1)}% =>`, { before: dmg, after: boosted });
-        return boosted;
-      }
-    },
-  };
-  return { name: "Mago", hooks };
+/** Normaliza nombre de clase de tu seed a una clave estable */
+function classKey(name?: string | null) {
+  switch (
+    String(name ?? "")
+      .trim()
+      .toLowerCase()
+  ) {
+    case "vampire":
+      return "vampire";
+    case "werewolf":
+      return "werewolf";
+    case "necromancer":
+      return "necromancer";
+    case "revenant":
+      return "revenant";
+    case "exorcist":
+      return "exorcist";
+    default:
+      return "unknown";
+  }
 }
 
-/**
- * Arquero – Ojo del Águila
- * Igual filosofía que el mago: rampa de +2% daño por ronda (máx 10%).
- */
-function archerEagleEyePack(): ClassPassivePack {
-  const hooks: PassiveHooks = {
-    onRoundStart({ state, side }) {
-      state.eagleEyeStacks = Math.min(5, Number(state.eagleEyeStacks ?? 0) + 1);
-      if (DBG) console.log(`[PASSIVE][${side}] Ojo del Águila stacks =`, state.eagleEyeStacks);
-    },
-    onModifyOutgoing({ dmg, state, side, pushEvent, self }) {
-      const className = (self as any)?.className || null;
-      if (className !== "Arquero") return;
-      const stacks = Math.max(0, Math.min(5, Number(state.eagleEyeStacks ?? 0)));
-      if (stacks > 0) {
-        const mult = 1 + stacks * 0.02;
-        const boosted = dmg * mult;
-        pushEvent(`${side}:eagleEye`);
-        if (DBG) console.log(`[PASSIVE][${side}] Ojo del Águila +${((mult - 1) * 100).toFixed(1)}% =>`, { before: dmg, after: boosted });
-        return boosted;
-      }
-    },
-  };
-  return { name: "Arquero", hooks };
+function log(...args: any[]) {
+  if (DBG) console.log("[ClassPacks]", ...args);
 }
 
-/**
- * Guerrero – Espíritu de Guardia
- * “Reduce el daño recibido mientras el escudo está activo”.
- * Hoy modelamos “escudo activo” como CUANDO BLOQUEA: si el golpe fue bloqueado,
- * aplica reducción adicional del 15% al daño ya mitigado por el bloqueo.
- */
-function warriorShieldSpiritPack(): ClassPassivePack {
-  const hooks: PassiveHooks = {
-    onModifyIncoming({ dmg, flags, side, pushEvent, self }) {
-      const className = (self as any)?.className || null;
-      if (className !== "Guerrero") return;
-
-      if (flags.blocked) {
-        const reduced = dmg * 0.85; // -15% extra sobre el daño ya mitigado
-        pushEvent(`${side}:shieldSpirit`);
-        if (DBG) console.log(`[PASSIVE][${side}] Espíritu de Guardia aplicado sobre bloqueo =>`, { before: dmg, after: reduced });
-        return reduced;
-      }
-    },
-  };
-  return { name: "Guerrero", hooks };
+/** Tag helper: emite un evento namespaced para la clase */
+function tag(pushEvent: (ev: string) => void, side: SideKey, cls: string, name: string) {
+  pushEvent(`${side}:class:${cls}:${name}`);
 }
 
+/* ────────────────────────────────────────────────────────────────────
+ * Packs por clase (solo tags; sin modificar daño en esta versión)
+ * ──────────────────────────────────────────────────────────────────── */
+
+function vampirePack(): ClassPassivePack {
+  const hooks: PassiveHooks = {
+    onRoundStart({ side, pushEvent }) {
+      tag(pushEvent, side, "vampire", "round_start"); // ej. pequeña aura carmesí
+      log("Vampire onRoundStart", side);
+    },
+    onModifyOutgoing({ side, flags, pushEvent }) {
+      // Si el golpe fue crítico, podemos destacar el “sabor” vampírico en UI
+      if (flags?.crit) tag(pushEvent, side, "vampire", "crit_flourish");
+      // no modificamos dmg
+    },
+    onModifyIncoming({ side, flags, pushEvent }) {
+      if (flags.blocked) tag(pushEvent, side, "vampire", "graceful_parry");
+    },
+  };
+  return { name: "Vampire", hooks };
+}
+
+function werewolfPack(): ClassPassivePack {
+  const hooks: PassiveHooks = {
+    onRoundStart({ side, pushEvent }) {
+      // Marca de frenesí creciente (solo visual/log)
+      tag(pushEvent, side, "werewolf", "frenzy_tick");
+      log("Werewolf onRoundStart", side);
+    },
+    onModifyOutgoing({ side, pushEvent }) {
+      // Cada ataque deja un rastro para VFX de garras
+      tag(pushEvent, side, "werewolf", "claw_trace");
+    },
+  };
+  return { name: "Werewolf", hooks };
+}
+
+function necromancerPack(): ClassPassivePack {
+  const hooks: PassiveHooks = {
+    onRoundStart({ side, pushEvent }) {
+      tag(pushEvent, side, "necromancer", "umbral_whisper");
+      log("Necromancer onRoundStart", side);
+    },
+    onModifyOutgoing({ side, pushEvent, flags }) {
+      if (flags?.crit) tag(pushEvent, side, "necromancer", "soul_crack");
+    },
+  };
+  return { name: "Necromancer", hooks };
+}
+
+function revenantPack(): ClassPassivePack {
+  const hooks: PassiveHooks = {
+    onRoundStart({ side, pushEvent }) {
+      tag(pushEvent, side, "revenant", "steady_aim");
+      log("Revenant onRoundStart", side);
+    },
+    onModifyOutgoing({ side, pushEvent }) {
+      tag(pushEvent, side, "revenant", "cursed_shot_trail");
+    },
+  };
+  return { name: "Revenant", hooks };
+}
+
+function exorcistPack(): ClassPassivePack {
+  const hooks: PassiveHooks = {
+    onRoundStart({ side, pushEvent }) {
+      tag(pushEvent, side, "exorcist", "sacred_aura");
+      log("Exorcist onRoundStart", side);
+    },
+    onModifyIncoming({ side, pushEvent, flags }) {
+      if (flags.blocked) tag(pushEvent, side, "exorcist", "holy_guard");
+    },
+  };
+  return { name: "Exorcist", hooks };
+}
+
+/* ────────────────────────────────────────────────────────────────────
+ * Builder
+ * ──────────────────────────────────────────────────────────────────── */
+
 /**
- * Builder de pack según nombre de clase.
- * Asesino no necesita hooks: su pasiva por defecto es un bono plano (+30% CDB) que ya aplicamos fuera.
+ * Devuelve el pack de pasivas “suaves” por clase.
+ * No modifica daño por ahora (solo emite tags para UI/logs).
+ * Si el nombre no coincide con tus clases del seed, retorna un pack vacío.
  */
 export function buildClassPassivePack(className?: string | null): ClassPassivePack {
-  switch (className) {
-    case "Mago":
-      return mageInnerFlamePack();
-    case "Arquero":
-      return archerEagleEyePack();
-    case "Guerrero":
-      return warriorShieldSpiritPack();
-    // "Asesino": sólo bono plano (se aplica en utils/passives.ts)
+  switch (classKey(className)) {
+    case "vampire":
+      return vampirePack();
+    case "werewolf":
+      return werewolfPack();
+    case "necromancer":
+      return necromancerPack();
+    case "revenant":
+      return revenantPack();
+    case "exorcist":
+      return exorcistPack();
     default:
-      return { name: className || "N/A", hooks: null };
+      return { name: String(className || "Unknown"), hooks: null };
   }
 }

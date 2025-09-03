@@ -30,19 +30,16 @@ const NAME_BY_TIER: Record<(typeof TIERS)[number]["key"], string> = {
   maestro: "Maestro",
 };
 
-// Plantillas por slot (sin agility ni wisdom)
+// Plantillas por slot (sin mana/maxMP)
 type Template = {
   type: "weapon" | "armor" | "accessory" | "potion" | "material";
-  // Bonus base a stats “base” válidos
   baseStats?: Partial<Record<"strength" | "dexterity" | "intelligence" | "vitality" | "physicalDefense" | "magicalDefense" | "luck" | "endurance", number>>;
-  // Bonus base a stats de combate válidos
   baseCombat?: Partial<
     Record<
       "maxHP" | "criticalChance" | "criticalDamageBonus" | "attackSpeed" | "evasion" | "blockChance" | "blockValue" | "lifeSteal" | "damageReduction" | "movementSpeed" | "magicPower" | "attackPower",
       number
     >
   >;
-  // Si es arma principal, definimos “base” para min/max (luego se escala)
   weaponBase?: { min: number; max: number; speed?: number; hands?: 1 | 2; kind?: WeaponData["type"] };
   icon: string;
   nameHint: string;
@@ -75,15 +72,14 @@ const SLOT_TEMPLATES: Record<SlotKey, Template> = {
   },
   mainWeapon: {
     type: "weapon",
-    // Referencia base; se escalará por tier/rareza
     weaponBase: { min: 6, max: 10, speed: 100, hands: 1, kind: "sword" },
-    // Podés sumar un poquito de AP/Magic si querés mantener compat:
     baseCombat: { attackPower: 2 },
     icon: "/icons/main_weapon.png",
     nameHint: "Arma",
   },
   offWeapon: {
-    // Mantengo “accessory” para compat; CombatManager actual ignora offhand
+    // Sigue como accessory para compat actual. Cuando agregues escudos reales:
+    // usá un objeto con { category: "shield", ... } y el runner aplicará el bonus.
     type: "accessory",
     baseStats: { physicalDefense: 1, magicalDefense: 1 },
     icon: "/icons/off_weapon.png",
@@ -111,7 +107,7 @@ const SLOT_TEMPLATES: Record<SlotKey, Template> = {
   },
 };
 
-// Entrada para crear un ítem (coincide con tu schema — incluye slug y weapon)
+// Entrada para crear un ítem (coincide con tu schema)
 export type SeedItemInput = {
   slug: string;
   name: string;
@@ -122,7 +118,7 @@ export type SeedItemInput = {
   rarity: Rarity;
   iconUrl: string;
 
-  weapon?: WeaponData; // solo para mainWeapon
+  weapon?: WeaponData; // solo si slot === "mainWeapon"
   stats?: Record<string, number>;
   combatStats?: Record<string, number>;
 
@@ -138,7 +134,7 @@ export type SeedItemInput = {
 };
 
 // ───────────────────────────────────────────────────────────────────────────────
-// Extras genéricos: SIN maná (sacamos maxMP del juego). Slot “belt” para cumplir schema.
+// Extras genéricos (sin maná)
 // ───────────────────────────────────────────────────────────────────────────────
 const EXTRA_GENERIC: Omit<SeedItemInput, "slug">[] = [
   {
@@ -151,7 +147,6 @@ const EXTRA_GENERIC: Omit<SeedItemInput, "slug">[] = [
     isConsumable: true,
     effects: ["restore_hp_50"],
   },
-  // ← Eliminada la de Maná
   { name: "Fragmento de Runa", type: "material", slot: "belt", rarity: "uncommon", iconUrl: "/icons/rune_frag.png", levelRequirement: 3 },
   { name: "Gema Brillante", type: "material", slot: "belt", rarity: "rare", iconUrl: "/icons/gem_bright.png", levelRequirement: 6 },
 ];
@@ -162,6 +157,7 @@ const EXTRA_GENERIC: Omit<SeedItemInput, "slug">[] = [
 function cap(s: string) {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
+
 // (a * m1 * m2) / 10000 / 10000, sólo enteros
 function scaleInt(base: number, mul1_bp: number, mul2_bp: number) {
   const a = Math.max(0, Math.floor(base));
@@ -171,8 +167,8 @@ function scaleInt(base: number, mul1_bp: number, mul2_bp: number) {
 }
 
 function makeRow(p: Omit<SeedItemInput, "slug"> & { slug: string }): SeedItemInput {
-  // precio: base 10 * rarity * (1 + lvlReq/10) → todo en enteros/BP
-  const lvlFactor_bp = 10000 + p.levelRequirement * 1000; // 10000 + 1000*lvl/10  ≈ 1 + lvl/10
+  // precio: base 10 * rarity * (1 + levelRequirement/10)
+  const lvlFactor_bp = 10000 + p.levelRequirement * 1000; // 10000 = 1.0; +1000 por nivel = +0.1 por nivel
   const price = Math.max(1, scaleInt(10, RARITY_BP[p.rarity], lvlFactor_bp));
 
   return {
@@ -200,8 +196,12 @@ function makeRow(p: Omit<SeedItemInput, "slug"> & { slug: string }): SeedItemInp
 
 function weaponFor(slot: SlotKey, tpl: Template, tierMul_bp: number, rarity_bp: number): WeaponData | undefined {
   if (slot !== "mainWeapon" || !tpl.weaponBase) return undefined;
-  const min = Math.max(0, scaleInt(tpl.weaponBase.min, tierMul_bp, rarity_bp));
-  const max = Math.max(min + 1, scaleInt(tpl.weaponBase.max, tierMul_bp, rarity_bp));
+  // 🔧 asegurar min ≥ 1 y max ≥ min + 1
+  const minRaw = scaleInt(tpl.weaponBase.min, tierMul_bp, rarity_bp);
+  const maxRaw = scaleInt(tpl.weaponBase.max, tierMul_bp, rarity_bp);
+  const min = Math.max(1, minRaw);
+  const max = Math.max(min + 1, maxRaw);
+
   const hands = tpl.weaponBase.hands ?? 1;
   const kind = tpl.weaponBase.kind ?? "sword";
   return {
@@ -212,7 +212,8 @@ function weaponFor(slot: SlotKey, tpl: Template, tierMul_bp: number, rarity_bp: 
     speed: tpl.weaponBase.speed ?? 100,
     critBonus_bp: 0,
     range: kind === "bow" || kind === "crossbow" ? 1 : 0,
-  };
+    // ⚠️ cuando agregues escudos, podés añadir `category: "shield"` al offhand
+  } as WeaponData;
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -230,7 +231,6 @@ export function buildSeedItems(): SeedItemInput[] {
         const stats: Record<string, number> = {};
         const combat: Record<string, number> = {};
 
-        // Escalado entero con basis points
         if (tpl.baseStats) {
           for (const [k, v] of Object.entries(tpl.baseStats)) {
             stats[k] = scaleInt(v as number, t.baseMul_bp, RARITY_BP[r]);
@@ -258,7 +258,7 @@ export function buildSeedItems(): SeedItemInput[] {
             iconUrl: tpl.icon,
             weapon: wpn, // solo para mainWeapon
             stats,
-            combatStats: combat, // mantenemos compat con tu código actual
+            combatStats: combat,
             levelRequirement: t.from,
           })
         );
@@ -282,7 +282,24 @@ export function buildSeedItems(): SeedItemInput[] {
 /** Inserta los items seed y devuelve los documentos insertados tipados. */
 export async function insertSeedItems(rows: SeedItemInput[] = buildSeedItems()): Promise<ItemDocument[]> {
   if (!rows.length) return [];
-  // Si querés tolerar duplicados de slug sin tirar toda la inserción, usá { ordered: false }
-  const inserted = await Item.insertMany(rows, { ordered: true });
-  return inserted as ItemDocument[];
+  try {
+    // ordered:false → si hay slugs duplicados no aborta toda la operación
+    const inserted = await Item.insertMany(rows, { ordered: false });
+    return inserted as ItemDocument[];
+  } catch (err: any) {
+    // Si hay duplicados (E11000) igual retornamos lo que se haya insertado
+    if (err?.writeErrors) {
+      const ok: ItemDocument[] = [];
+      for (const we of err.writeErrors) {
+        if (we.err && we.err.op) {
+          // no hay doc insertado en los errores; ignoramos
+        }
+      }
+      // Re-leemos lo existente para devolver algo útil (opcional)
+      const slugs = rows.map((r) => r.slug);
+      const existing = await Item.find({ slug: { $in: slugs } }).lean<ItemDocument[]>();
+      return existing as ItemDocument[];
+    }
+    throw err;
+  }
 }

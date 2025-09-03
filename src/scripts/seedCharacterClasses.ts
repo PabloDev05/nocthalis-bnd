@@ -13,7 +13,7 @@ export const seedCharacterClasses = [
     allowedWeapons: ["Rapier", "Dagger", "Shortsword", "Scimitar", "Kris", "Shadowfang Blade", "Crimson Scimitar", "Bloodfang Sabre", "Shadow Kris", "Nightfang Blade", "Curved Fangblade"],
 
     // Passive: flat bonus damage + extra combat stat for 3 turns (Fate-based, repeatable)
-    passiveSkill: {
+    passiveDefaultSkill: {
       enabled: true,
       name: "Crimson Impulse",
       damageType: "magical",
@@ -136,7 +136,7 @@ export const seedCharacterClasses = [
     defaultWeapon: "Iron Claws",
     allowedWeapons: ["Iron Claws", "Dual Daggers", "Shortsword", "Light Axe", "Feral Fangblade", "Savage Paw", "Claw Gauntlets", "Beast Fangs", "Dire Talons", "Bloodclaw", "Rendfangs"],
 
-    passiveSkill: {
+    passiveDefaultSkill: {
       enabled: true,
       name: "Lupine Frenzy",
       damageType: "magical",
@@ -248,7 +248,7 @@ export const seedCharacterClasses = [
     defaultWeapon: "Bone Staff",
     allowedWeapons: ["Bone Staff", "Scepter", "Wand", "Occult Rod", "Grimoire", "Soul Orb", "Corrupted Scepter", "Skull Wand", "Plague Rod", "Soulbone Cane", "Ghoul Scepter", "Occult Crook"],
 
-    passiveSkill: {
+    passiveDefaultSkill: {
       enabled: true,
       name: "Umbral Focus",
       damageType: "magical",
@@ -360,7 +360,7 @@ export const seedCharacterClasses = [
     defaultWeapon: "Cursed Crossbow",
     allowedWeapons: ["Cursed Crossbow", "Twin Flintlocks", "Shortbow", "Arquebus", "Hexed Rifle", "Twin Daggers", "Ancient Pistol", "Bone Carbine", "Spectral Arquebus", "Ghastly Handcannon"],
 
-    passiveSkill: {
+    passiveDefaultSkill: {
       enabled: true,
       name: "Spectral Deadeye",
       damageType: "magical",
@@ -472,7 +472,7 @@ export const seedCharacterClasses = [
     defaultWeapon: "Holy Mace",
     allowedWeapons: ["Holy Mace", "Flail", "Warhammer", "Morningstar", "Censer", "Cleric Staff", "Consecrated Flail", "Blessed Morningstar", "Iron Censer", "Divine Hammer", "Sanctified Club"],
 
-    passiveSkill: {
+    passiveDefaultSkill: {
       enabled: true,
       name: "Hallowed Smite",
       damageType: "magical",

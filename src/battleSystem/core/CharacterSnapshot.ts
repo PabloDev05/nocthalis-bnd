@@ -1,32 +1,32 @@
-// src/services/characterSnapshot.ts
+// src/battleSystem/snapshots/characterSnapshot.ts
 // Construye un snapshot autocontenido para guardar en Match.
-// NO cambia tu lógica de combate: acá NO convertimos %→fracción.
-// El CombatManager/runner hará las conversiones que necesite.
+// ❗ Copiamos valores "tal cual" (no convertimos %→fracción aquí).
+// El CombatManager/runner hacen las conversiones y aplican jitters/bonos.
 
 export type CharacterSnapshot = {
-  // ---- Requeridos por Match ----
+  // ---- Identidad / vínculo
   userId: any; // ObjectId o string
   characterId: any; // ObjectId o string
-  username: string; // visible en UI
-  className: string; // visible en UI
-  weapon: string; // slug para animaciones: p.ej. "basic_bow"
 
-  // ---- Datos visibles / auxiliares ----
+  // ---- Para UI
+  username: string;
   name: string;
   level: number;
+  className: string;
 
-  // ---- Números base (se copian tal cual) ----
+  // ---- Armas (para UI/animación; el Manager usa equipment también)
+  weapon: string; // slug principal (fallback seguro)
+
+  // ---- Números base (se copian tal cual)
   stats: Record<string, number>;
   resistances: Record<string, number>;
   equipment: Record<string, unknown>;
 
-  // ---- HP redundante ----
+  // ---- HP redundante
   maxHP: number;
   currentHP: number;
 
-  // ---- Bloque de combate (TAL CUAL está en el personaje) ----
-  // Si tus combatStats traen porcentajes (12.9, 5, 15.7, etc),
-  // se guardan así; el runner los normaliza después.
+  // ---- Bloque de combate (tal cual esté en el personaje)
   combat: {
     attackPower: number;
     magicPower: number;
@@ -34,7 +34,7 @@ export type CharacterSnapshot = {
     blockChance: number; // idem
     damageReduction: number; // idem
     criticalChance: number; // idem
-    criticalDamageBonus: number; // puede venir 41.4 (=+41.4%) o 0.5 (=+50%) según tu modelo
+    criticalDamageBonus: number; // 41.4 (=+41.4%) o 0.5 (=+50%)
     attackSpeed: number;
     maxHP?: number; // redundante
   };
@@ -42,15 +42,62 @@ export type CharacterSnapshot = {
   // Por compat con código que mira "combatStats" en vez de "combat"
   combatStats: CharacterSnapshot["combat"];
 
-  // ---- Opcional: metadata de clase/pasiva (para UI/runner) ----
-  class?: { name: string; passiveDefault?: { name: string; description?: string } | null };
-  passiveDefault?: { name: string; description?: string } | null; // espejo conveniente
+  // ---- Metadata de clase para runner/UI (necesario para Fate procs y arma por defecto)
+  class?: {
+    name: string;
+    defaultWeapon?: string;
+    primaryWeapons?: string[];
+    secondaryWeapons?: string[];
+    passiveDefaultSkill?: {
+      enabled?: boolean;
+      name: string;
+      damageType?: "physical" | "magical";
+      shortDescEn?: string;
+      longDescEn?: string;
+      trigger: {
+        check: "onBasicHit" | "onRangedHit" | "onSpellCast" | "onHitOrBeingHit" | "onTurnStart";
+        scaleBy?: "fate";
+        baseChancePercent?: number;
+        fateScalePerPoint?: number;
+        maxChancePercent?: number;
+      };
+      durationTurns?: number;
+      bonusDamage?: number;
+      extraEffects?: Record<string, number>;
+    } | null;
+    ultimateSkill?: {
+      enabled?: boolean;
+      name: string;
+      description?: string;
+      cooldownTurns: number;
+      effects?: {
+        bonusDamagePercent?: number;
+        applyDebuff?: string;
+        debuffValue?: number;
+        bleedDamagePerTurn?: number;
+        debuffDurationTurns?: number;
+      };
+      proc?: {
+        enabled?: boolean;
+        respectCooldown?: boolean;
+        trigger?: {
+          check: "onTurnStart";
+          scaleBy?: "fate";
+          baseChancePercent?: number;
+          fateScalePerPoint?: number;
+          maxChancePercent?: number;
+        };
+      };
+    } | null;
+  };
+
+  // Legacy: por si algo del front mira esto
+  passiveDefault?: { name: string; description?: string } | null;
 };
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Helpers mínimos (sin conversiones de %)
-// ───────────────────────────────────────────────────────────────────────────────
-
+/* ───────────────────────────────────────────────────────────────────────────────
+ * Helpers mínimos (sin conversiones de %)
+ * ───────────────────────────────────────────────────────────────────────────── */
 const toNum = (v: any, d = 0) => {
   if (typeof v === "string") {
     const s = v.replace?.("%", "").replace?.(",", ".") ?? v;
@@ -66,42 +113,42 @@ const clampInt = (v: any, min: number, max: number) => {
   return Math.max(min, Math.min(max, n));
 };
 
-const toSlug = (s: any) =>
+const slugify = (s: any) =>
   String(s ?? "")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "") || "";
 
-// Fallback de arma por clase
-const inferWeaponByClass = (className?: string): string => {
-  const c = (className || "").toLowerCase();
-  if (c.includes("guerrero")) return "basic_sword";
-  if (c.includes("mago")) return "basic_staff";
-  if (c.includes("asesino")) return "basic_dagger";
-  if (c.includes("arquero")) return "basic_bow";
-  return "fists";
-};
+/** Selecciona el slug de arma desde distintas formas de equipo/snapshot. */
+function selectWeaponSlug(character: any, classDefaultWeapon?: string): string {
+  // Del equipo / snapshot (string u objeto con slug/name)
+  const candidates: any[] = [
+    character?.weapon,
+    character?.weapon?.slug,
+    character?.equipment?.weapon,
+    character?.equipment?.weapon?.slug,
+    character?.equipment?.mainHand,
+    character?.equipment?.mainHand?.slug,
+    character?.equipment?.mainWeapon,
+    character?.equipment?.mainWeapon?.slug,
+    character?.equipment?.weaponName,
+  ].filter(Boolean);
 
-// Selección de arma (slug) desde snapshot/equipo → fallback por clase
-function pickWeaponSlug(character: any, className?: string): string {
-  const slug =
-    character?.weapon?.slug ??
-    character?.weapon ?? // si ya viene seteado como string
-    character?.equipment?.weapon?.slug ??
-    character?.equipment?.mainHand?.slug ??
-    character?.equipment?.weaponName ??
-    character?.equipment?.weapon?.name ??
-    (character?.equipment?.weaponId ? `weapon#${character.equipment.weaponId}` : null);
+  for (const c of candidates) {
+    const s = typeof c === "string" ? c : c?.slug ?? c?.name;
+    const slug = slugify(s);
+    if (slug) return slug;
+  }
 
-  const resolved = slug ? toSlug(slug) : inferWeaponByClass(className);
-  return resolved || inferWeaponByClass(className);
+  // Fallback: defaultWeapon de la clase si existe; si no, "fists"
+  const dw = slugify(classDefaultWeapon);
+  return dw || "fists";
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Builder (pasa TODO tal cual; solo asegura que HP sea válido y arma por defecto)
-// ───────────────────────────────────────────────────────────────────────────────
-
+/* ───────────────────────────────────────────────────────────────────────────────
+ * Builder (pasa TODO tal cual; asegura arma/HP válidos y adjunta metadatos de clase)
+ * ───────────────────────────────────────────────────────────────────────────── */
 export function buildCharacterSnapshot(character: any): CharacterSnapshot {
   // Ids / identidad
   const userId = character?.userId ?? character?.user?._id ?? character?.user?.id;
@@ -109,32 +156,36 @@ export function buildCharacterSnapshot(character: any): CharacterSnapshot {
   const username = character?.username ?? character?.user?.username ?? character?.user?.name ?? "—";
   const name = character?.name ?? username ?? "—";
 
-  const className = character?.className ?? character?.class?.name ?? "—";
+  // Clase: puede venir como string o como doc poblado (character.classId o character.class)
+  const classDoc = character?.classId && typeof character.classId === "object" && character.classId.name ? character.classId : character?.class;
+
+  const className = String(classDoc?.name ?? character?.className ?? "—");
+  const defaultWeapon = classDoc?.defaultWeapon ? String(classDoc.defaultWeapon) : undefined;
+  const primaryWeapons = Array.isArray(classDoc?.primaryWeapons) ? classDoc.primaryWeapons.slice() : undefined;
+  const secondaryWeapons = Array.isArray(classDoc?.secondaryWeapons) ? classDoc.secondaryWeapons.slice() : undefined;
+  const passiveDefaultSkill = classDoc?.passiveDefaultSkill ?? null;
+  const ultimateSkill = classDoc?.ultimateSkill ?? null;
+
   const level = toNum(character?.level, 1);
 
-  // Pasiva por defecto (si viene en la clase del doc)
-  const passiveDefault = character?.class?.passiveDefault ?? character?.passiveDefault ?? null;
-
-  // Arma (slug): equipo → snapshot → por clase
-  const weapon = pickWeaponSlug(character, className);
+  // Arma (slug): equipo → defaultWeapon de la clase → "fists"
+  const weapon = selectWeaponSlug(character, defaultWeapon);
 
   // Combat de origen (copiamos TAL CUAL esté en el personaje)
   const srcCombat = character?.combatStats ?? character?.combat ?? {};
   const combat = {
     attackPower: toNum(srcCombat.attackPower, 0),
     magicPower: toNum(srcCombat.magicPower, 0),
-    // IMPORTANTÍSIMO: NO convertimos aquí.
     evasion: toNum(srcCombat.evasion, 0),
     blockChance: toNum(srcCombat.blockChance, 0),
     damageReduction: toNum(srcCombat.damageReduction, 0),
     criticalChance: toNum(srcCombat.criticalChance, 0),
-    // Puede venir 41.4 (=+41.4%) o 0.5 (=+50%); el runner lo normaliza
     criticalDamageBonus: toNum(srcCombat.criticalDamageBonus, 0.5),
     attackSpeed: toNum(srcCombat.attackSpeed, 1),
     maxHP: toNum(srcCombat.maxHP ?? character?.maxHP, 100),
   };
 
-  // HP coherente (inicia al 100%)
+  // HP coherente
   const maxHP = clampInt(character?.maxHP ?? combat.maxHP, 1, 10_000_000);
   const currentHP = clampInt(character?.currentHP ?? maxHP, 0, maxHP);
 
@@ -143,16 +194,16 @@ export function buildCharacterSnapshot(character: any): CharacterSnapshot {
   const resistances = { ...(character?.resistances ?? {}) } as Record<string, number>;
   const equipment = { ...(character?.equipment ?? {}) } as Record<string, unknown>;
 
-  // Ensamblar snapshot
   const snap: CharacterSnapshot = {
     userId,
     characterId,
-    username,
-    className,
-    weapon,
 
+    username,
     name,
     level,
+    className,
+
+    weapon,
 
     stats,
     resistances,
@@ -162,11 +213,19 @@ export function buildCharacterSnapshot(character: any): CharacterSnapshot {
     currentHP,
 
     combat,
-    combatStats: combat, // espejo por compat
+    combatStats: combat,
 
-    // metadata de clase/pasiva (opcional; útil para UI y runner)
-    class: { name: className, passiveDefault },
-    passiveDefault,
+    class: {
+      name: className,
+      defaultWeapon,
+      primaryWeapons,
+      secondaryWeapons,
+      passiveDefaultSkill,
+      ultimateSkill,
+    },
+
+    // Legacy: si tu UI antigua lo usa
+    passiveDefault: classDoc?.passiveDefault ? { name: String(classDoc.passiveDefault.name ?? ""), description: String(classDoc.passiveDefault.description ?? "") } : null,
   };
 
   return snap;

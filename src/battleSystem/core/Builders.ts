@@ -1,3 +1,4 @@
+// src/battleSystem/factories/buildCombatEntities.ts
 import { Types } from "mongoose";
 import { Character } from "../../models/Character";
 import { Enemy } from "../../models/Enemy";
@@ -14,6 +15,7 @@ const DEF_STATS: Stats = {
   magicalDefense: 0,
   luck: 0,
   endurance: 0,
+  fate: 0, // ✅ faltaba este campo requerido por Stats
 };
 
 const DEF_RES: Resistances = {

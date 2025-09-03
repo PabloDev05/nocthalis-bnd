@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { RequestHandler } from "express";
 import mongoose from "mongoose";
 import { User } from "../models/User";
@@ -7,6 +8,14 @@ import { Character } from "../models/Character";
 /**
  * POST /character/choose-class
  * body: { selectedClass: string }  // _id de CharacterClass
+ *
+ * Flujo:
+ * - Usuario elige clase -> creamos Character asociado
+ * - Copiamos stats/resistencias/combatStats de la clase
+ * - currentHP = maxHP
+ * - equipo inicial con defaultWeapon
+ * - skillState inicial
+ * - stamina inicial = 100/100, regen por defecto (full en 24h → staminaRegenPerHour = 0)
  */
 export const chooseClass: RequestHandler = async (req, res) => {
   const { selectedClass } = (req.body as { selectedClass?: string }) || {};
@@ -54,33 +63,97 @@ export const chooseClass: RequestHandler = async (req, res) => {
       return;
     }
 
-    // Crear personaje clonando valores base de la clase
+    // Bloques base clonados
+    const stats = { ...charClass.baseStats };
+    const resistances = { ...charClass.resistances };
+    const combatStats = { ...charClass.combatStats };
+
+    // Vida inicial = tope
+    const currentHP = Math.max(1, Number(combatStats.maxHP ?? 1));
+
+    // Equipo inicial
+    const equipment = {
+      helmet: null,
+      chest: null,
+      gloves: null,
+      boots: null,
+      mainWeapon: charClass.defaultWeapon ?? null,
+      offWeapon: null,
+      ring: null,
+      belt: null,
+      amulet: null,
+    } as const;
+
+    // Estado de skills
+    const skillState = {
+      passiveBuff: null,
+      ultimate: charClass.ultimateSkill?.enabled
+        ? {
+            name: charClass.ultimateSkill.name,
+            cooldownLeft: 0,
+            silencedUntilTurn: null,
+          }
+        : null,
+    };
+
+    // Stamina inicial (política full en 24h)
+    const now = new Date();
+    const STAMINA_INIT = {
+      stamina: 100,
+      staminaMax: 100,
+      staminaRegenPerHour: 0, // 0 = usar “full en 24h” desde stamina.service
+      staminaUpdatedAt: now,
+      nextStaminaFullAt: null,
+    };
+
+    // Crear personaje
     const character = await Character.create(
       [
         {
           userId: user._id,
           classId: charClass._id,
+
           level: 1,
           experience: 0,
-          stats: charClass.baseStats,
-          resistances: charClass.resistances,
-          combatStats: charClass.combatStats,
-          passivesUnlocked: [charClass.passiveDefault?.name].filter(Boolean),
+
+          stats,
+          resistances,
+          combatStats,
+
+          maxHP: combatStats.maxHP,
+          currentHP,
+
+          equipment,
+          inventory: [],
+
+          skillState,
+
+          gold: 0,
+          honor: 0,
+
+          // stamina
+          ...STAMINA_INIT,
+
           subclassId: null,
-        },
+        } as any,
       ],
       { session }
     ).then((docs) => docs[0]);
 
     // Marcar usuario
-    user.characterClass = charClass._id;
+    user.characterClass = charClass._id as any;
     user.classChosen = true;
     await user.save({ session });
 
     await session.commitTransaction();
 
-    // Respuesta con metadatos de clase (sin stats del template si no querés)
-    const characterPopulated = await Character.findById(character._id).populate({ path: "classId", select: "name iconName imageMainClassUrl passiveDefault subclasses" }).lean();
+    // Respuesta con metadatos
+    const characterPopulated = await Character.findById(character._id)
+      .populate({
+        path: "classId",
+        select: "name iconName imageMainClassUrl primaryWeapons secondaryWeapons defaultWeapon allowedWeapons passiveDefaultSkill ultimateSkill subclasses",
+      })
+      .lean();
 
     res.status(200).json({
       message: "Clase asignada con éxito.",

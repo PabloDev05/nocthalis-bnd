@@ -1,74 +1,101 @@
 // src/controllers/character.controller.ts
+/* eslint-disable no-console */
 import { RequestHandler } from "express";
-import { Types } from "mongoose";
+import mongoose, { Types } from "mongoose";
 import { Character } from "../models/Character";
 import { CharacterClass } from "../models/CharacterClass";
 import { computeAvailablePoints } from "../services/allocation.service";
+import { getStaminaByUserId } from "../services/stamina.service";
 import type { BaseStats, CombatStats, Resistances } from "../interfaces/character/CharacterClass.interface";
 import { roundCombatStatsForResponse } from "../utils/characterFormat";
 
 const DBG = process.env.DEBUG_ALLOCATION === "1";
 
-/** DTOs */
-type PassiveDTO = { id: string; name: string; description: string; detail?: string };
+/** DTOs minimalistas y alineados al diseño nuevo */
 type SubclassDTO = {
   id: string;
   name: string;
   iconName: string;
   imageSubclassUrl?: string;
-  passiveDefault?: PassiveDTO | null;
-  passives: PassiveDTO[];
   slug?: string | null;
 };
+
 type ClassMetaDTO = {
   id: string;
   name: string;
   iconName: string;
   imageMainClassUrl: string;
-  passiveDefault: PassiveDTO;
+  // info de armas para la UI (bono 10% si es primaria, lo aplica el motor)
+  primaryWeapons: string[];
+  secondaryWeapons: string[];
+  defaultWeapon: string;
+  allowedWeapons: string[];
+
+  passiveDefaultSkill: any | null;
+  ultimateSkill: any | null;
   subclasses: SubclassDTO[];
 };
+
 type CharacterResponseDTO = {
   id: string;
   userId: Types.ObjectId;
   username: string;
+
   class: ClassMetaDTO;
   selectedSubclass: SubclassDTO | null;
+
   level: number;
   experience: number;
-  stats: BaseStats;
+
+  stats: BaseStats; // incluye fate
   resistances: Resistances;
-  combatStats: CombatStats;
+  combatStats: CombatStats; // ya redondeado para UI
+
   equipment: Record<string, string | null>;
   inventory: string[];
-  passivesUnlocked: string[];
+
   createdAt: Date;
   updatedAt: Date;
+
   availablePoints?: number;
+
+  stamina: {
+    stamina: number;
+    staminaMax: number;
+    usedRate: number;
+    updatedAt: string;
+    etaFullAt: string | null;
+  };
 };
 
 /** helpers */
-const toId = (x: any) => (x?._id ?? x?.id)?.toString();
-const mapPassive = (p: any | undefined): PassiveDTO | null => (!p ? null : { id: toId(p), name: p.name, description: p.description, detail: p.detail });
+const toId = (x: any) => (x?._id ?? x?.id)?.toString() || "";
+
 const mapSubclass = (s: any): SubclassDTO => ({
   id: toId(s),
-  name: s.name,
-  iconName: s.iconName,
+  name: String(s.name ?? ""),
+  iconName: String(s.iconName ?? ""),
   imageSubclassUrl: s.imageSubclassUrl,
-  passiveDefault: mapPassive(s.passiveDefault),
-  passives: Array.isArray(s.passives) ? (s.passives.map(mapPassive).filter(Boolean) as PassiveDTO[]) : [],
   slug: s.slug ?? null,
 });
+
 const mapClassMeta = (raw: any): ClassMetaDTO => ({
   id: toId(raw),
-  name: raw.name,
-  iconName: raw.iconName,
-  imageMainClassUrl: raw.imageMainClassUrl,
-  passiveDefault: mapPassive(raw.passiveDefault)!,
+  name: String(raw.name ?? ""),
+  iconName: String(raw.iconName ?? ""),
+  imageMainClassUrl: String(raw.imageMainClassUrl ?? ""),
+
+  primaryWeapons: Array.isArray(raw.primaryWeapons) ? raw.primaryWeapons : [],
+  secondaryWeapons: Array.isArray(raw.secondaryWeapons) ? raw.secondaryWeapons : [],
+  defaultWeapon: String(raw.defaultWeapon ?? ""),
+  allowedWeapons: Array.isArray(raw.allowedWeapons) ? raw.allowedWeapons : [],
+
+  passiveDefaultSkill: raw.passiveDefaultSkill ?? null,
+  ultimateSkill: raw.ultimateSkill ?? null,
   subclasses: Array.isArray(raw.subclasses) ? raw.subclasses.map(mapSubclass) : [],
 });
 
-/** Normaliza a BaseStats */
+/** Normaliza a BaseStats (incluye fate) */
 function coerceBaseStats(src: any): BaseStats {
   return {
     strength: Number(src?.strength ?? 0),
@@ -79,6 +106,7 @@ function coerceBaseStats(src: any): BaseStats {
     magicalDefense: Number(src?.magicalDefense ?? 0),
     luck: Number(src?.luck ?? 0),
     endurance: Number(src?.endurance ?? 0),
+    fate: Number(src?.fate ?? 0),
   };
 }
 
@@ -86,56 +114,73 @@ function coerceBaseStats(src: any): BaseStats {
 export const getMyCharacter: RequestHandler = async (req, res) => {
   try {
     const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ message: "No autenticado" });
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(401).json({ message: "No autenticado" });
+    }
 
-    // ⬇️ Traigo también el username del User
-    const characterDoc = await Character.findOne({ userId }).populate({ path: "userId", select: "username" }).exec();
+    // Personaje + username del User
+    const characterDoc = await Character.findOne({ userId }).populate({ path: "userId", select: "username" }).lean();
+
     if (!characterDoc) return res.status(404).json({ message: "Personaje no encontrado" });
 
-    const baseClassDoc = await CharacterClass.findById(characterDoc.classId).select("name iconName imageMainClassUrl passiveDefault subclasses baseStats");
+    // Clase con metadatos nuevos
+    const baseClassDoc = await CharacterClass.findById(characterDoc.classId)
+      .select("name iconName imageMainClassUrl primaryWeapons secondaryWeapons defaultWeapon allowedWeapons passiveDefaultSkill ultimateSkill subclasses baseStats")
+      .lean();
+
     if (!baseClassDoc) return res.status(404).json({ message: "Clase base no encontrada" });
 
-    const ch = characterDoc.toObject();
-    const baseClassRaw = baseClassDoc.toObject();
+    const classMeta = mapClassMeta(baseClassDoc);
 
-    const baseClass: ClassMetaDTO = mapClassMeta(baseClassRaw);
+    // Subclase seleccionada (si existe)
+    const subclassIdStr = characterDoc.subclassId ? String(characterDoc.subclassId) : null;
+    const selectedSubclass = subclassIdStr && Array.isArray(classMeta.subclasses) ? classMeta.subclasses.find((s) => s.id === subclassIdStr) ?? null : null;
 
-    const subclassIdStr = ch.subclassId ? String(ch.subclassId) : null;
-    const selectedSubclass = subclassIdStr && Array.isArray(baseClass.subclasses) ? baseClass.subclasses.find((s) => s.id === subclassIdStr) ?? null : null;
-
-    const statsBS: BaseStats = coerceBaseStats(ch.stats);
-    const baseBS: BaseStats = coerceBaseStats(baseClassRaw.baseStats);
-
-    const availablePoints = computeAvailablePoints(Number(ch.level ?? 1), statsBS, baseBS);
+    // Puntos disponibles respecto a base de la clase (ahora con fate)
+    const statsBS: BaseStats = coerceBaseStats(characterDoc.stats);
+    const baseBS: BaseStats = coerceBaseStats(baseClassDoc.baseStats);
+    const availablePoints = computeAvailablePoints(Number(characterDoc.level ?? 1), statsBS, baseBS);
     if (DBG) console.log("[/character/me] availablePoints:", availablePoints);
 
-    const combatStatsRounded = roundCombatStatsForResponse(ch.combatStats || ({} as any));
+    // Combat stats “bonitos” para UI
+    const combatStatsRounded = roundCombatStatsForResponse(characterDoc.combatStats || ({} as any));
 
-    // ⬇️ username desde el populate (o desde req.user), sin tocar el modelo de Character
+    // username desde el populate (o desde req.user)
     const usernameFromPopulate = (characterDoc as any)?.userId?.username ?? (req.user as any)?.username ?? "—";
+
+    // Regeneración perezosa de stamina + snapshot
+    const staminaSnap = await getStaminaByUserId(userId);
 
     const payload: CharacterResponseDTO = {
       id: String(characterDoc._id),
-      userId: ch.userId,
+      userId: characterDoc.userId as unknown as Types.ObjectId,
       username: usernameFromPopulate,
-      class: baseClass,
+
+      class: classMeta,
       selectedSubclass,
-      level: ch.level,
-      experience: ch.experience,
-      stats: ch.stats as BaseStats,
-      resistances: ch.resistances as Resistances,
+
+      level: characterDoc.level,
+      experience: characterDoc.experience,
+
+      stats: characterDoc.stats as BaseStats,
+      resistances: characterDoc.resistances as Resistances,
       combatStats: combatStatsRounded,
-      equipment: ch.equipment,
-      inventory: ch.inventory,
-      passivesUnlocked: ch.passivesUnlocked,
-      createdAt: ch.createdAt,
-      updatedAt: ch.updatedAt,
+
+      equipment: characterDoc.equipment,
+      inventory: characterDoc.inventory,
+
+      createdAt: characterDoc.createdAt as Date,
+      updatedAt: characterDoc.updatedAt as Date,
+
       availablePoints,
+      stamina: staminaSnap,
     };
 
-    return res.json(payload);
+    return res.status(200).json(payload);
   } catch (err) {
     console.error("getMyCharacter error:", err);
     return res.status(500).json({ message: "Error interno del servidor" });
   }
 };
+
+export default getMyCharacter;

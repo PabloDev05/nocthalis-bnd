@@ -1,8 +1,5 @@
-// Match para PvP moderno (con estado y snapshots).
-// Guarda ambos lados (attacker/defender) con snapshots “congelados” (stats, arma min/max, etc.).
-// outcome es POV atacante (attacker/defender/draw) y winner POV motor (player/enemy/draw).
-// Puede almacenar timeline/log/snapshots, pero podés decidir guardar solo lo necesario (y slice en listados).
-// Ideal para colas de arena, rankings y re-correr peleas siempre con el mismo snapshot.
+// src/controllers/arena.controller.ts
+/* eslint-disable no-console */
 
 import { Request, Response } from "express";
 import { Types } from "mongoose";
@@ -11,10 +8,19 @@ import { CharacterClass } from "../models/CharacterClass";
 import { Match } from "../models/Match";
 import { buildCharacterSnapshot } from "../battleSystem/core/CharacterSnapshot";
 
-const toId = (x: any) => (x?._id ?? x?.id)?.toString();
+const toId = (x: any) => (x?._id ?? x?.id)?.toString() || "";
 const asObjectId = (v: any) => {
   const s = String(v ?? "");
   return Types.ObjectId.isValid(s) ? new Types.ObjectId(s) : null;
+};
+
+// Sólo lo que necesitamos de la clase (dejamos meta por si el front la usa a futuro)
+type ClassMetaSnap = {
+  name: string;
+  passiveDefaultSkill?: any | null;
+  ultimateSkill?: any | null;
+  primaryWeapons?: string[] | null;
+  defaultWeapon?: string | null;
 };
 
 /* --------------------------------- GET /arena/opponents --------------------------------- */
@@ -40,7 +46,7 @@ export async function getArenaOpponentsController(req: Request, res: Response) {
     const rivals = await Character.find(filter)
       .sort({ level: -1 })
       .limit(size)
-      .select("userId level classId className stats resistances combatStats maxHP currentHP equipment avatarUrl")
+      .select("userId level classId stats resistances combatStats maxHP currentHP equipment avatarUrl")
       .populate({ path: "userId", select: "username" })
       .lean();
 
@@ -56,12 +62,14 @@ export async function getArenaOpponentsController(req: Request, res: Response) {
     const opponents = (rivals ?? []).map((r: any) => {
       const combat = r?.combatStats ?? r?.combat ?? {};
       const name = r?.userId?.username ?? r?.username ?? r?.name ?? "—";
-      const className = r?.className ?? classNameById.get(toId(r.classId)) ?? "—";
+      const className = classNameById.get(toId(r.classId)) ?? "—";
       const maxHP = Number(r?.maxHP ?? combat?.maxHP ?? 0);
       const currentHP = Number(r?.currentHP ?? maxHP);
 
       return {
         id: toId(r.userId ?? r._id), // el front usa userId rival
+        userId: toId(r.userId),
+        characterId: toId(r._id),
         name,
         level: Number(r?.level ?? 1),
         className,
@@ -90,7 +98,6 @@ export async function postArenaChallengeController(req: Request, res: Response) 
 
     const opponentId = String((req.body ?? {}).opponentId ?? "");
     if (!opponentId) return res.status(400).json({ message: "opponentId requerido" });
-
     if (opponentId === meId) {
       return res.status(400).json({ message: "No podés desafiarte a vos mismo" });
     }
@@ -107,28 +114,42 @@ export async function postArenaChallengeController(req: Request, res: Response) 
     if (!attackerDoc) return res.status(404).json({ message: "Tu personaje no existe" });
     if (!defenderDoc) return res.status(404).json({ message: "Oponente no encontrado" });
 
+    // Metadatos de clase (para pasivas/ult, armas primarias, etc.)
     const [attClass, defClass] = await Promise.all([
-      attackerDoc.classId ? CharacterClass.findById(attackerDoc.classId).select("name passiveDefault") : null,
-      defenderDoc.classId ? CharacterClass.findById(defenderDoc.classId).select("name passiveDefault") : null,
+      attackerDoc.classId ? CharacterClass.findById(attackerDoc.classId).select("name passiveDefaultSkill ultimateSkill primaryWeapons defaultWeapon").lean<ClassMetaSnap>() : null,
+      defenderDoc.classId ? CharacterClass.findById(defenderDoc.classId).select("name passiveDefaultSkill ultimateSkill primaryWeapons defaultWeapon").lean<ClassMetaSnap>() : null,
     ]);
 
     const attackerRaw: any = attackerDoc.toObject();
     const defenderRaw: any = defenderDoc.toObject();
 
     if (attClass) {
-      const c = attClass.toObject();
-      attackerRaw.class = { name: c.name, passiveDefault: c.passiveDefault };
+      attackerRaw.class = {
+        name: attClass.name,
+        passiveDefaultSkill: attClass.passiveDefaultSkill ?? null,
+        ultimateSkill: attClass.ultimateSkill ?? null,
+        primaryWeapons: attClass.primaryWeapons ?? null,
+        defaultWeapon: attClass.defaultWeapon ?? null, // se guarda por si el front lo muestra, pero NO auto-equipamos
+      };
     }
     if (defClass) {
-      const c = defClass.toObject();
-      defenderRaw.class = { name: c.name, passiveDefault: c.passiveDefault };
+      defenderRaw.class = {
+        name: defClass.name,
+        passiveDefaultSkill: defClass.passiveDefaultSkill ?? null,
+        ultimateSkill: defClass.ultimateSkill ?? null,
+        primaryWeapons: defClass.primaryWeapons ?? null,
+        defaultWeapon: defClass.defaultWeapon ?? null,
+      };
     }
 
+    // Snapshots “congelados” (no tocar arma aquí)
     const attackerSnapshot = buildCharacterSnapshot(attackerRaw);
     const defenderSnapshot = buildCharacterSnapshot(defenderRaw);
 
+    // Seed pseudo-aleatoria
     const seed = (Date.now() & 0xffffffff) ^ Math.floor(Math.random() * 0xffffffff);
 
+    // Match pendiente
     const match = await Match.create({
       attackerUserId: attackerDoc.userId,
       attackerCharacterId: attackerDoc._id,
@@ -139,19 +160,16 @@ export async function postArenaChallengeController(req: Request, res: Response) 
       defenderSnapshot,
       seed,
 
-      // 👇 estado inicial
-      mode: "pvp", // ⚠️ importante: NO "pending"
+      mode: "pvp",
       status: "pending",
-      winner: null,
-      outcome: null,
-      turns: 0,
-      timeline: [],
-      log: [],
-      snapshots: [],
-      rewards: null,
+      runnerVersion: 2, // alinea con simulate/resolve
     });
 
-    return res.status(201).json({ matchId: (match._id as any).toString(), status: match.status });
+    return res.status(201).json({
+      matchId: match.id,
+      status: match.status,
+      seed,
+    });
   } catch (err: any) {
     console.error("postArenaChallengeController error:", err);
     const message = err?.errors ? `Validación: ${Object.keys(err.errors).join(", ")}` : err?.message || "Error interno del servidor";

@@ -1,11 +1,13 @@
+// src/controllers/characterEquipment.controller.ts
+/* eslint-disable no-console */
 import { Request, Response } from "express";
 import { Types } from "mongoose";
 import { Character, type Equipment, type EquipmentSlot } from "../models/Character";
 import { Item, type ItemLean } from "../models/Item";
-import { computeProgression } from "../services/progression.service";
+import { getStaminaByUserId, setStamina } from "../services/stamina.service";
 
 // Slots válidos según el modelo
-const ALLOWED_SLOTS = ["helmet", "chest", "gloves", "boots", "mainWeapon", "offWeapon", "ring", "belt", "amulet"] as const satisfies Readonly<EquipmentSlot[]>;
+const ALLOWED_SLOTS = ["helmet", "chest", "gloves", "boots", "mainWeapon", "offWeapon", "ring", "belt", "amulet"] as const;
 type AllowedSlot = (typeof ALLOWED_SLOTS)[number];
 
 /** Garantiza que `character.equipment` tenga todas las claves inicializadas */
@@ -77,9 +79,19 @@ export async function equipItem(req: Request, res: Response) {
     }
     const slot: AllowedSlot = incomingSlot;
 
-    // Requisito de nivel
+    // Requisito de nivel (si el item lo define)
     if ((item.levelRequirement ?? 1) > (character.level || 1)) {
       return res.status(400).json({ message: "Nivel insuficiente para equipar este ítem" });
+    }
+
+    // (Opcional) Restringir a clase si el item trae restricción
+    if (Array.isArray((item as any).classRestriction) && (item as any).classRestriction.length) {
+      // Si querés validar de verdad, populá la clase del personaje y chequea el nombre contra classRestriction.
+      // Por ahora solo permitimos; descomenta si ya tenés className en Character.
+      // const className = (character as any).className;
+      // if (!className || !(item as any).classRestriction.includes(className)) {
+      //   return res.status(400).json({ message: "Tu clase no puede equipar este ítem" });
+      // }
     }
 
     ensureEquipment(character);
@@ -158,6 +170,37 @@ export async function unequipItem(req: Request, res: Response) {
   }
 }
 
+/** Detecta “curas” básicas en un consumible sin romper si no existen */
+function detectConsumableHeals(item: any): { staminaGain: number; hpGain: number } {
+  let staminaGain = 0;
+  let hpGain = 0;
+
+  // Campos sencillos comunes
+  if (Number.isFinite((item as any).staminaRestore)) staminaGain = Math.max(0, Math.floor((item as any).staminaRestore));
+  if (Number.isFinite((item as any).hpRestore)) hpGain = Math.max(0, Math.floor((item as any).hpRestore));
+
+  // effects?: { stamina?: number; hp?: number }
+  if ((item as any).effects) {
+    if (Number.isFinite((item as any).effects.stamina)) staminaGain = Math.max(staminaGain, Math.floor((item as any).effects.stamina));
+    if (Number.isFinite((item as any).effects.hp)) hpGain = Math.max(hpGain, Math.floor((item as any).effects.hp));
+  }
+
+  // mods[]: buscamos special stamina / hp
+  if (Array.isArray((item as any).mods)) {
+    for (const m of (item as any).mods) {
+      if (!m || typeof m !== "object") continue;
+      if (m.scope === "special" && (m.key === "stamina" || m.key === "staminaRestore") && m.mode === "add") {
+        staminaGain = Math.max(staminaGain, Math.floor(Number(m.value || 0)));
+      }
+      if (m.scope === "special" && (m.key === "hp" || m.key === "hpRestore") && m.mode === "add") {
+        hpGain = Math.max(hpGain, Math.floor(Number(m.value || 0)));
+      }
+    }
+  }
+
+  return { staminaGain, hpGain };
+}
+
 /** POST /character/use-item  { itemId } — consumibles */
 export async function useConsumable(req: Request, res: Response) {
   try {
@@ -173,51 +216,45 @@ export async function useConsumable(req: Request, res: Response) {
     if (!item) return res.status(404).json({ message: "Ítem no encontrado" });
 
     // Debe estar en inventario
-    const inInv = (character.inventory || []).some((x: string) => String(x) === String(item.id ?? (item as any)._id));
+    const idStr = String(item.id ?? (item as any)._id);
+    const inInv = (character.inventory || []).some((x: string) => String(x) === idStr);
     if (!inInv) return res.status(400).json({ message: "El ítem no está en tu inventario" });
 
-    if (!item.isConsumable) {
+    if (!item.isConsumable && (item as any).type !== "potion") {
       return res.status(400).json({ message: "El ítem no es consumible" });
     }
 
-    // TODO: aplicar efecto según 'effects' / tipo
-    character.inventory = (character.inventory || []).filter((x: string) => String(x) !== String(item.id ?? (item as any)._id));
+    // Detectar curas básicas
+    const { staminaGain, hpGain } = detectConsumableHeals(item);
+
+    // Aplicar stamina (cap y ETA manejados por el servicio)
+    let staminaAfter: any | undefined;
+    if (staminaGain > 0) {
+      const snap = await getStaminaByUserId(userId).catch(() => null);
+      const next = Math.max(0, Math.floor((snap?.stamina ?? 0) + staminaGain));
+      staminaAfter = await setStamina(userId, next).catch(() => undefined);
+    }
+
+    // Aplicar HP si corresponde (cap a maxHP)
+    if (hpGain > 0) {
+      const maxHP = Number((character as any).combatStats?.maxHP ?? (character as any).maxHP ?? 0);
+      const curHP = Number((character as any).currentHP ?? maxHP);
+      const nextHP = Math.min(maxHP, Math.max(0, curHP + Math.floor(hpGain)));
+      (character as any).currentHP = nextHP;
+    }
+
+    // Consumir: quitar del inventario
+    character.inventory = (character.inventory || []).filter((x: string) => String(x) !== idStr);
     await character.save();
 
-    return res.json({ message: "Consumible usado", itemId: item.id ?? (item as any)._id?.toString() });
-  } catch (err) {
-    console.error("useConsumable error:", err);
-    return res.status(500).json({ message: "Error interno" });
-  }
-}
-
-/** GET /character/progression — curva acumulativa (todos enteros) */
-export async function getProgression(req: Request, res: Response) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ message: "No autenticado" });
-
-    const character = await Character.findOne({ userId }).lean();
-    if (!character) return res.status(404).json({ message: "Personaje no encontrado" });
-
-    const exp = Number(character.experience ?? 0);
-    const lvl = Number(character.level ?? 1);
-
-    const p = computeProgression(exp, lvl);
-
     return res.json({
-      level: p.level,
-      experience: exp,
-      currentLevelAt: p.currentLevelAt,
-      nextLevelAt: p.nextLevelAt,
-      xpSinceLevel: p.xpSinceLevel,
-      xpForThisLevel: p.xpForThisLevel,
-      xpToNext: p.xpToNext,
-      xpPercent: p.xpPercentInt, // porcentaje entero 0..100
-      isMaxLevel: p.isMaxLevel,
+      message: "Consumible usado",
+      itemId: idStr,
+      staminaAfter, // snapshot si aplicó
+      currentHP: (character as any).currentHP,
     });
   } catch (err) {
-    console.error("getProgression error:", err);
+    console.error("useConsumable error:", err);
     return res.status(500).json({ message: "Error interno" });
   }
 }

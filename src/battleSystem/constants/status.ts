@@ -1,7 +1,10 @@
+// src/battleSystem/constants/status.ts
+
 /**
  * Base definitions of BUFFS/DEBUFFS for turn-based combat.
  * - Keys, names, description for UI/logs.
- * - No numbers in balance yet, only structure.
+ * - No balance numbers here; just structure (durations, tags, affected stats).
+ * - Safe to import even if your engine still doesn't apply any status logic.
  */
 
 export const STATUS_KEYS = [
@@ -31,21 +34,28 @@ export const STATUS_KEYS = [
 export type StatusKey = (typeof STATUS_KEYS)[number];
 export type StatusKind = "buff" | "debuff";
 
-/**
- * Definition of a status effect (buff or debuff).
- */
+/** Definition of a status effect (buff or debuff). */
 export interface StatusDef {
   key: StatusKey;
   kind: StatusKind;
   name: string;
   description?: string;
+  /** Optional free-form tags for UI/filters (“dot”, “control”, “physical”, “magic”, etc.) */
   tags?: string[];
+  /** Max stacks if stackable (omit or 1 for non-stackable) */
   maxStacks?: number;
+  /** Default duration in turns (UI & fallback) */
   baseDuration?: number;
+  /** When periodic effects tick */
   tickOn?: "turnStart" | "turnEnd";
+  /**
+   * Names of derived stats this status is expected to modify while active.
+   * This is just metadata for the engine/UI (e.g., ["attackPower", "damageReduction"]).
+   */
   affects?: string[];
 }
 
+/** Catalog with readable names & minimal metadata. */
 export const STATUS_CATALOG: Record<StatusKey, StatusDef> = {
   // ───── Debuffs ─────
   burn: {
@@ -104,7 +114,7 @@ export const STATUS_CATALOG: Record<StatusKey, StatusDef> = {
     description: "Weakened by dark magic.",
     tags: ["magic"],
     baseDuration: 2,
-    affects: ["attackPower", "defense"],
+    affects: ["attackPower", "magicPower"],
   },
 
   stun: {
@@ -147,7 +157,7 @@ export const STATUS_CATALOG: Record<StatusKey, StatusDef> = {
     key: "fear",
     kind: "debuff",
     name: "Fear",
-    description: "Reduces offensive capability.",
+    description: "Reduces offensive capability (often Crit).",
     tags: ["control", "mental"],
     baseDuration: 2,
     affects: ["criticalChance"],
@@ -222,24 +232,26 @@ export const STATUS_CATALOG: Record<StatusKey, StatusDef> = {
   },
 };
 
+/** Helper to retrieve a definition (safe for UI). */
 export function getStatusDef(key: StatusKey): StatusDef {
   return STATUS_CATALOG[key];
 }
 
 /**
- * 📌 EXPLICACIÓN
+ * 📌 Notes
  *
- * - Cada estado tiene duración en turnos (`baseDuration`).
- * - Los DoT (`burn`, `poison`, `bleed`) aplican su daño al inicio del turno (`tickOn: turnStart`).
- * - Estados con `affects` modifican stats mientras están activos (ej: `weaken` → baja defensa física).
- * - Control (CC): `stun`, `sleep`, `silence` bloquean acciones o ultimates por turnos definidos.
+ * - Durations are in turns (`baseDuration`).
+ * - DoTs (`burn`, `poison`, `bleed`) typically tick at `turnStart`.
+ * - `affects` lists the derived stats a status intends to modify while active
+ *   (your engine can read this as hints when you implement full status math).
  *
- * - Ultimates de las clases están alineadas:
- *   Vampire → `weaken`
- *   Werewolf → `bleed`
- *   Necromancer → `curse`
- *   Revenant → `fear`
- *   Exorcist → `silence`
+ * - Class ultimates mapping (per your seed):
+ *   Vampire   → applies `weaken`
+ *   Werewolf  → applies `bleed`
+ *   Necromancer → applies `curse`
+ *   Revenant  → applies `fear`
+ *   Exorcist  → applies `silence`
  *
- * ✅ Esto asegura un combate automático por turnos simple, balanceado y fácil de mantener.
+ * This file is **non-breaking**: importing it won't alter combat unless you
+ * explicitly wire these statuses in your runner/engine.
  */

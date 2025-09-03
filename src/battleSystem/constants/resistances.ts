@@ -1,12 +1,18 @@
+// src/battleSystem/constants/resistances.ts
+
 /**
  * Resistencias del sistema de combate.
  *
  * Escala sugerida: 0–100 (porcentaje). 0 = sin resistencia; 100 = inmune.
- * Fórmula típica (ejemplo para proc de estado): chanceEfectiva = chanceBase * (1 - resistencia/100).
- * Para reducción de daño crítico: valor final = base * (1 - criticalDamageReduction/100).
+ * Fórmula típica (ejemplo para proc de estado):
+ *   chanceEfectiva = chanceBase * (1 - resistencia/100).
+ * Reducción de daño crítico:
+ *   bonusCriticoFinal = bonusCriticoBase * (1 - criticalDamageReduction/100).
  *
- * Esta tabla sirve como: (1) documentación viva, (2) baseline para seeds o templates,
- * (3) lista centralizada de claves para render/UI.
+ * Esta tabla sirve como:
+ *  (1) documentación viva
+ *  (2) baseline para seeds o plantillas
+ *  (3) lista centralizada de claves para render/UI.
  */
 
 export const RESISTANCE_KEYS = [
@@ -32,7 +38,7 @@ export type ResistanceKey = (typeof RESISTANCE_KEYS)[number];
 
 export type ResistancesMap = Record<ResistanceKey, number>;
 
-/** Baseline propuesto (puede usarse para seeds / chooseClass / plantillas de clase). */
+/** Baseline propuesto (podés usarlo para seeds / chooseClass / defaults). */
 export const DEFAULT_RESISTANCES: ResistancesMap = {
   fire: 6,
   ice: 6,
@@ -61,7 +67,7 @@ export const RESISTANCE_DOCS: Record<ResistanceKey, string> = {
   sleep: "Reduce probabilidad de quedar dormido.",
   paralysis: "Reduce probabilidad de inmovilización.",
   confusion: "Reduce probabilidad de confusión.",
-  fear: "Reduce probabilidad de pánico/huida.",
+  fear: "Reduce probabilidad de pánico/huida (afecta crítico).",
   dark: "Reduce daño/efectos de magia oscura.",
   holy: "Reduce daño/efectos de magia sagrada.",
   stun: "Reduce probabilidad/duración de aturdimiento.",
@@ -72,7 +78,7 @@ export const RESISTANCE_DOCS: Record<ResistanceKey, string> = {
   criticalDamageReduction: "Resta al BONUS de daño crítico del atacante.",
 };
 
-/** Utilidad defensiva para mantener en 0–100. */
-export function clampRes(v: number) {
+/** Utilidad defensiva para mantener en 0–100 (enteros). */
+export function clampRes(v: number): number {
   return Math.max(0, Math.min(100, Math.round(v)));
 }

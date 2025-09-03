@@ -1,6 +1,8 @@
+// src/controllers/combatResult.controller.ts
+/* eslint-disable no-console */
+
 // Listado y detalle de historiales de combate (con slicing opcional)
-// Registro directo de una pelea ya corrido (PvE o PvP viejo)
-// Histórico de combate, guarda log y snapshots del combate
+// Guarda log y snapshots del combate (PvE o PvP viejo)
 const DBG = process.env.DEBUG_COMBAT === "1";
 
 import { Request, Response } from "express";
@@ -8,9 +10,9 @@ import { Types } from "mongoose";
 import { CombatResult } from "../models/CombatResult";
 
 type ModeFilter = "preview" | "resolve" | "pvp-preview" | "pvp-resolve";
-type WinnerFilter = "player" | "enemy" | "none";
+type WinnerFilter = "player" | "enemy" | "draw" | "none";
 
-/* utilitos */
+/* utils */
 const toInt = (v: any, d: number) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.floor(n) : d;
@@ -22,7 +24,7 @@ const isObjId = (s?: string) => !!s && Types.ObjectId.isValid(s);
 /* ------------------------------------------------------------------ */
 export async function getCombatResultsController(req: Request, res: Response) {
   try {
-    const { page = "1", limit = "20", mode, enemyId, characterId, winner } = req.query as Record<string, string>;
+    const { page = "1", limit = "20", mode, enemyId, characterId, winner, matchId } = req.query as Record<string, string>;
 
     const p = Math.max(1, parseInt(page || "1", 10));
     const l = Math.min(100, Math.max(1, parseInt(limit || "20", 10)));
@@ -45,16 +47,25 @@ export async function getCombatResultsController(req: Request, res: Response) {
       filter.enemyId = new Types.ObjectId(enemyId);
     }
 
+    // Enlazado PvP (si viene)
+    if (matchId && isObjId(matchId)) {
+      filter.matchId = new Types.ObjectId(matchId);
+    }
+
     // Filtro por modo
     const allowedModes: ModeFilter[] = ["preview", "resolve", "pvp-preview", "pvp-resolve"];
     if (mode && (allowedModes as string[]).includes(mode)) {
       filter.mode = mode;
     }
 
-    // Filtro por winner (acepta 'none' en algunos dumps antiguos)
-    const allowedWinners: WinnerFilter[] = ["player", "enemy", "none"];
+    // Filtro por winner (acepta 'none' para dumps viejos)
+    const allowedWinners: WinnerFilter[] = ["player", "enemy", "draw", "none"];
     if (winner && (allowedWinners as string[]).includes(winner)) {
-      filter.winner = winner;
+      if (winner === "none") {
+        filter.$or = [{ winner: "none" }, { winner: "draw" }, { winner: null }];
+      } else {
+        filter.winner = winner;
+      }
     }
 
     if (DBG) console.log("[HIST] Listar combates:", { p, l, filter });
@@ -71,6 +82,7 @@ export async function getCombatResultsController(req: Request, res: Response) {
           userId: 1,
           characterId: 1,
           enemyId: 1,
+          matchId: 1,
           mode: 1,
           winner: 1,
           turns: 1,
@@ -79,7 +91,7 @@ export async function getCombatResultsController(req: Request, res: Response) {
           // arrays fuera del listado
           snapshots: { $slice: 0 },
           log: { $slice: 0 },
-          timeline: { $slice: 0 },
+          // rewards compacto
           rewards: 1,
         })
         .lean()
@@ -98,12 +110,11 @@ export async function getCombatResultsController(req: Request, res: Response) {
 /* ------------------------------------------------------------------ */
 /**
  * Query params (opcionales):
- *  - tlSkip, tlLimit: paginado para timeline
  *  - ssSkip, ssLimit: paginado para snapshots
  *  - logSkip, logLimit: paginado para log
- *  - withCounts=1: devuelve {counts:{timeline,snapshots,log}} sin cargar arrays completos
+ *  - withCounts=1: devuelve {counts:{snapshots,log}} sin cargar arrays completos
  *
- * Defaults conservadores (no rompen nada):
+ * Defaults:
  *  - ...Limit por defecto = 200; ...Skip por defecto = 0
  */
 export async function getCombatResultDetailController(req: Request, res: Response) {
@@ -115,16 +126,14 @@ export async function getCombatResultDetailController(req: Request, res: Respons
 
     // slicing params
     const q = req.query as Record<string, string>;
-    const tlSkip = Math.max(0, toInt(q.tlSkip, 0));
-    const tlLimit = Math.max(0, toInt(q.tlLimit, 200));
     const ssSkip = Math.max(0, toInt(q.ssSkip, 0));
     const ssLimit = Math.max(0, toInt(q.ssLimit, 200));
     const logSkip = Math.max(0, toInt(q.logSkip, 0));
     const logLimit = Math.max(0, toInt(q.logLimit, 200));
     const withCounts = q.withCounts === "1";
 
-    // Construimos el query con slice por campo (Mongoose Query#slice)
-    const query = CombatResult.findById(id).slice("timeline", [tlSkip, tlLimit]).slice("snapshots", [ssSkip, ssLimit]).slice("log", [logSkip, logLimit]);
+    // Solo slices que existen en el modelo (no hay timeline aquí)
+    const query = CombatResult.findById(id).slice("snapshots", [ssSkip, ssLimit]).slice("log", [logSkip, logLimit]);
 
     const doc = await query.lean().exec();
     if (!doc) return res.status(404).json({ message: "No encontrado" });
@@ -134,30 +143,29 @@ export async function getCombatResultDetailController(req: Request, res: Respons
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    let counts: { timeline: number; snapshots: number; log: number } | undefined;
+    let counts: { snapshots: number; log: number } | undefined;
 
     if (withCounts) {
-      // Traemos solo los tamaños con un aggregate, sin cargar los arrays
-      const agg = await CombatResult.aggregate<{ timeline: number; snapshots: number; log: number }>([
+      // Traemos sólo los tamaños con un aggregate, sin cargar arrays
+      const agg = await CombatResult.aggregate<{ snapshots: number; log: number }>([
         { $match: { _id: new Types.ObjectId(id) } },
         {
           $project: {
-            timeline: { $size: { $ifNull: ["$timeline", []] } },
             snapshots: { $size: { $ifNull: ["$snapshots", []] } },
             log: { $size: { $ifNull: ["$log", []] } },
           },
         },
       ]);
-      counts = agg[0] ?? { timeline: 0, snapshots: 0, log: 0 };
+      counts = agg[0] ?? { snapshots: 0, log: 0 };
     }
 
     if (DBG)
       console.log("[HIST] Detalle combate:", {
         id,
-        winner: doc.winner,
-        mode: doc.mode,
-        turns: doc.turns,
-        slices: { tlSkip, tlLimit, ssSkip, ssLimit, logSkip, logLimit },
+        winner: (doc as any).winner,
+        mode: (doc as any).mode,
+        turns: (doc as any).turns,
+        slices: { ssSkip, ssLimit, logSkip, logLimit },
       });
 
     return res.json({ ...doc, counts });

@@ -22,7 +22,7 @@ export interface CombatSnapshotDoc {
   damage: number; // entero >= 0
   playerHP: number; // HP restante del atacante (POV player) tras el evento
   enemyHP: number; // HP restante del defensor tras el evento
-  events: string[]; // tags: "player:hit", "enemy:weapon:basic_bow", etc.
+  events: string[]; // tags: "player:hit", "enemy:weapon:basic_bow", "player:passive:Bleed", "enemy:ultimate:ShadowNova", etc.
   status?: {
     player: { key: string; stacks: number; turnsLeft: number }[];
     enemy: { key: string; stacks: number; turnsLeft: number }[];
@@ -66,7 +66,8 @@ const StatusEntrySchema = new Schema(
 
 const SnapshotSchema = new Schema<CombatSnapshotDoc>(
   {
-    round: { ...IntNonNeg, required: true },
+    // override min a 1 para cumplir contrato “>= 1”
+    round: { ...IntNonNeg, min: 1, required: true },
     actor: { type: String, enum: ["player", "enemy"], required: true },
     damage: { ...IntNonNeg, required: true },
     playerHP: { ...IntNonNeg, required: true },
@@ -104,7 +105,12 @@ const CombatResultSchema = new Schema<CombatResultDocument>(
       xpGained: IntNonNeg,
       goldGained: IntNonNeg,
       honorDelta: IntAny, // puede ser negativo
-      levelUps: { type: [Number], default: [] }, // (validá como entero al escribir)
+      levelUps: {
+        type: [Number],
+        default: [],
+        // fuerza enteros por si llegan como strings/floats
+        set: (arr: any) => (Array.isArray(arr) ? arr.map((v) => Math.trunc(Number(v) || 0)).filter((n) => Number.isFinite(n)) : []),
+      },
       drops: { type: [String], default: [] },
     },
   },

@@ -1,208 +1,354 @@
-// src/battleSystem/core/SimulateCombat.ts
-const DBG = process.env.DEBUG_COMBAT === "1";
+// src/controllers/simulateCombat.controller.ts
+/* eslint-disable no-console */
+import type { RequestHandler } from "express";
+import { Types } from "mongoose";
+import { Match } from "../../models/Match";
+import { Character } from "../../models/Character";
+import { runPvp } from "../../battleSystem";
+import { computeProgression } from "../../services/progression.service";
+import { spendStamina, getStaminaByUserId } from "../../services/stamina.service";
 
-import { PlayerCharacter } from "../entities/PlayerCharacter";
-import { EnemyBot } from "../entities/EnemyBot";
-import { CombatManager } from "./CombatManager";
-import { mulberry32 } from "../core/RngFightSeed";
+/** Costo de stamina por pelea PvP (se cobra al resolver) */
+const STAMINA_COST_PVP = 10;
 
-import { applyPassivesToBlocks, collectPassivesForCharacter } from "../passives/PassiveEffects";
-import { buildClassPassivePack } from "../passives/ClassPacks";
+/** Versión de runner (Fate/procs/ultimate) para auditar persistencia */
+const RUNNER_VERSION = 2;
 
-import { baseStatsGuerrero, resistenciasGuerrero, combatStatsGuerrero, baseStatsEnemigo, resistenciasEnemigo, combatStatsEnemigo } from "../fixtures/Fixtures";
-
-export type SimMode = "fixtures" | "real-preview" | "real";
-
-export interface SimulateParams {
-  mode?: SimMode;
-  player?: any;
-  enemy?: any;
-  useConsumables?: boolean;
-  skills?: string[];
-  seed?: number;
+function mapOutcomeForMatch(outcome: "win" | "lose" | "draw") {
+  return outcome === "win" ? "attacker" : outcome === "lose" ? "defender" : "draw";
 }
 
-export type StatusPublic = { key: string; stacks: number; turnsLeft: number };
+function computePvpRewards(outcome: "win" | "lose" | "draw") {
+  if (outcome === "win") {
+    return {
+      attacker: { xp: 25, gold: 20, honorDelta: +10 },
+      defender: { xp: 12, gold: 10, honorDelta: -8 },
+      responseForAttacker: { xpGained: 25, goldGained: 20, honorDelta: +10 },
+    };
+  }
+  if (outcome === "lose") {
+    return {
+      attacker: { xp: 12, gold: 10, honorDelta: -8 },
+      defender: { xp: 25, gold: 20, honorDelta: +10 },
+      responseForAttacker: { xpGained: 12, goldGained: 10, honorDelta: -8 },
+    };
+  }
+  return {
+    attacker: { xp: 18, gold: 12, honorDelta: 0 },
+    defender: { xp: 18, gold: 12, honorDelta: 0 },
+    responseForAttacker: { xpGained: 18, goldGained: 12, honorDelta: 0 },
+  };
+}
 
-export type CombatSnapshot = {
-  round: number;
-  actor: "player" | "enemy";
-  damage: number;
-  playerHP: number;
-  enemyHP: number;
-  events: string[]; // p.ej. ["player:attack","player:hit","enemy:block"]
-  // status?: { player: StatusPublic[]; enemy: StatusPublic[] }; // <-- si más adelante expones estado público, lo reactivas
+/** Compat: si tenés un campo de puntos en la DB, lo incrementamos en level-up */
+const POINTS_FIELDS = ["availablePoints", "statPoints", "unallocatedPoints", "pointsAvailable", "attributePoints"] as const;
+const ATTR_POINTS_PER_LEVEL = 5;
+
+/** Aplica recompensas + actualiza level si corresponde */
+async function applyRewardsToCharacter(charId: any | undefined, userId: any | undefined, rw: { xp?: number; gold?: number; honorDelta?: number }) {
+  let doc = (charId && (await Character.findById(charId))) || (userId && (await Character.findOne({ userId })));
+
+  if (!doc) return { updated: false };
+
+  // sumas planas
+  if (typeof (doc as any).experience === "number" && typeof rw.xp === "number") {
+    (doc as any).experience += rw.xp;
+  }
+  if (typeof rw.gold === "number" && rw.gold > 0) {
+    if (typeof (doc as any).gold === "number") (doc as any).gold += rw.gold;
+    else if (typeof (doc as any).coins === "number") (doc as any).coins += rw.gold;
+  }
+  if (typeof rw.honorDelta === "number" && typeof (doc as any).honor === "number") {
+    (doc as any).honor += rw.honorDelta;
+  }
+
+  // recalcular nivel segun XP total
+  const prevLevel = Number((doc as any).level ?? 1);
+  const totalXP = Number((doc as any).experience ?? 0);
+  const prog = computeProgression(totalXP, prevLevel);
+  const newLevel = Number(prog?.level ?? prevLevel);
+
+  if (newLevel > prevLevel) {
+    (doc as any).level = newLevel;
+
+    // Compat opcional: si existe alguno de estos campos, asignamos puntos
+    const gained = (newLevel - prevLevel) * ATTR_POINTS_PER_LEVEL;
+    for (const f of POINTS_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(doc, f)) {
+        (doc as any)[f] = Math.max(0, Math.floor(Number((doc as any)[f] ?? 0))) + gained;
+        break;
+      }
+    }
+  }
+
+  await doc.save();
+  return { updated: true, characterId: (doc as any)._id };
+}
+
+/* ---------- normalización de timeline para cumplir schema ---------- */
+type TLIn =
+  | {
+      turn?: number;
+      source?: "attacker" | "defender";
+      actor?: "attacker" | "defender";
+      event?: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast";
+      damage?: number;
+      attackerHP?: number;
+      defenderHP?: number;
+      playerHP?: number;
+      enemyHP?: number;
+      events?: string[]; // legacy (fallback de tags)
+      ability?: {
+        kind?: "passive" | "ultimate";
+        name?: string;
+        id?: string;
+        durationTurns?: number;
+      };
+      tags?: string[];
+    }
+  | any;
+
+const toInt = (v: any, def = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.floor(n) : def;
 };
 
-export interface SimulateResult {
-  winner: "player" | "enemy";
-  turns: number;
-  log: string[];
-  snapshots: CombatSnapshot[];
-}
+function normalizeTimeline(items: TLIn[] | undefined | null) {
+  const arr = Array.isArray(items) ? items : [];
+  return arr.map((it, idx) => {
+    const source = (it.source ?? it.actor ?? "attacker") as "attacker" | "defender";
+    const turn = toInt(it.turn ?? idx + 1, idx + 1);
 
-// -------------------------- helpers -----------------------------------------
-
-function obj(o: any, fallback: any) {
-  if (!o || typeof o !== "object") return { ...fallback };
-  return { ...fallback, ...o };
-}
-
-function ensurePlayer(pcLike: any): { pc: PlayerCharacter; className?: string | null } {
-  if (pcLike instanceof PlayerCharacter) {
-    const className = (pcLike as any)?.className ?? null;
-    if (DBG) console.log("[SIM] ensurePlayer: ya es instancia", { className });
-    return { pc: pcLike, className };
-  }
-
-  const id = String(pcLike?.id || pcLike?._id || "p1");
-  const name = String(pcLike?.name || pcLike?.username || "Jugador");
-  const level = Number(pcLike?.level ?? 1);
-
-  const statsBase = obj(pcLike?.stats, baseStatsGuerrero);
-  const res = obj(pcLike?.resistances, resistenciasGuerrero);
-  const cmbBase = obj(pcLike?.combatStats, combatStatsGuerrero);
-
-  const className: string | null = pcLike?.classId && typeof pcLike.classId === "object" && "name" in pcLike.classId ? (pcLike.classId as any).name : pcLike?.className ?? null;
-
-  const flatPassives = collectPassivesForCharacter(pcLike);
-  const { stats, combatStats } = applyPassivesToBlocks(statsBase, cmbBase, flatPassives);
-
-  const pc = new PlayerCharacter(id, name, level, stats, res, combatStats);
-  (pc as any).className = className;
-  return { pc, className };
-}
-
-function ensureEnemy(ebLike: any): { eb: EnemyBot; className?: string | null } {
-  if (ebLike instanceof EnemyBot) {
-    const className = (ebLike as any)?.className ?? null;
-    if (DBG) console.log("[SIM] ensureEnemy: ya es instancia", { className });
-    return { eb: ebLike, className };
-  }
-
-  const id = String(ebLike?.id || ebLike?._id || "e1");
-  const name = String(ebLike?.name || "Enemigo");
-  const level = Number(ebLike?.level ?? 1);
-
-  const stats = obj(ebLike?.stats, baseStatsEnemigo);
-  const res = obj(ebLike?.resistances, resistenciasEnemigo);
-  const cmb = obj(ebLike?.combatStats, combatStatsEnemigo);
-
-  const eb = new EnemyBot(id, name, level, stats, res, cmb);
-  const className: string | null = ebLike?.className ?? null;
-  (eb as any).className = className;
-  return { eb, className };
-}
-
-// --------------------------- main -------------------------------------------
-
-export async function simulateCombat(params: SimulateParams = {}): Promise<SimulateResult> {
-  const mode: SimMode = params.mode ?? "fixtures";
-  const rng = typeof params.seed === "number" ? mulberry32(params.seed) : Math.random;
-
-  if (DBG) console.log("[SIM] Iniciando simulateCombat:", { mode, seed: params.seed });
-
-  const log: string[] = [];
-  const snapshots: CombatSnapshot[] = [];
-
-  let player: PlayerCharacter;
-  let enemy: EnemyBot;
-  let playerClassName: string | null = null;
-  let enemyClassName: string | null = null;
-
-  if (mode === "fixtures") {
-    player = new PlayerCharacter("p1", "Jugador Guerrero", 1, baseStatsGuerrero, resistenciasGuerrero, combatStatsGuerrero);
-    (player as any).className = "Guerrero";
-    enemy = new EnemyBot("e1", "Rata Gigante", 1, baseStatsEnemigo, resistenciasEnemigo, combatStatsEnemigo);
-  } else {
-    const p = ensurePlayer(params.player);
-    player = p.pc;
-    playerClassName = p.className ?? null;
-
-    const e = ensureEnemy(params.enemy);
-    enemy = e.eb;
-    enemyClassName = e.className ?? null;
-  }
-
-  // Packs de clase (por ahora NO se inyectan al manager porque el core no los consume aún)
-  const pPack = buildClassPassivePack(playerClassName || (player as any).className || null);
-  const ePack = buildClassPassivePack(enemyClassName || (enemy as any).className || null);
-  if (DBG) {
-    console.log("[SIM] class hooks:", {
-      playerClass: (player as any).className || null,
-      enemyClass: (enemy as any).className || null,
-      pHooks: !!pPack.hooks,
-      eHooks: !!ePack.hooks,
-    });
-  }
-
-  // ⚠️ Manager core actual NO acepta playerHooks/enemyHooks en options
-  const manager = new CombatManager(player, enemy, { rng });
-
-  let round = 1;
-
-  log.push("⚔️ Inicio del combate ⚔️");
-  log.push(`${player.name} (HP: ${player.currentHP}) VS ${enemy.name} (HP: ${enemy.currentHP})`);
-  log.push("======================================");
-
-  while (!manager.isCombatOver() && round <= 200) {
-    if (DBG) console.log("[SIM] >>> Ronda", round);
-
-    manager.startRound(round, () => {}); // mantenemos la señal de inicio si el core la usa
-    log.push(`🔄 Ronda ${round}`);
-
-    // --- Turno del jugador
-    const outP = manager.playerAttack();
-    const pEvents: string[] = ["player:attack"];
-    if (outP.flags.miss) pEvents.push("player:miss");
-    else {
-      if (outP.flags.crit) pEvents.push("player:crit");
-      if (outP.flags.blocked) pEvents.push("enemy:block");
-      pEvents.push("player:hit", "player:hit:physical");
+    // HPs: aceptar player/enemy (legacy) o attacker/defender directos
+    let attackerHP = toInt(it.attackerHP, NaN);
+    let defenderHP = toInt(it.defenderHP, NaN);
+    if (!Number.isFinite(attackerHP) || !Number.isFinite(defenderHP)) {
+      const p = toInt(it.playerHP, 0);
+      const e = toInt(it.enemyHP, 0);
+      if (source === "attacker") {
+        attackerHP = p;
+        defenderHP = e;
+      } else {
+        attackerHP = e;
+        defenderHP = p;
+      }
     }
-    log.push(`🗡️ ${player.name} ataca e inflige ${outP.damage} de daño.`);
-    log.push(`💔 ${enemy.name} HP restante: ${Math.max(0, enemy.currentHP)}`);
-    snapshots.push({
-      round,
-      actor: "player",
-      damage: outP.damage,
-      playerHP: Math.max(0, player.currentHP),
-      enemyHP: Math.max(0, enemy.currentHP),
-      events: pEvents,
-      // status: undefined,
-    });
-    if (manager.isCombatOver()) break;
+    attackerHP = Math.max(0, attackerHP);
+    defenderHP = Math.max(0, defenderHP);
 
-    // --- Turno del enemigo
-    const outE = manager.enemyAttack();
-    const eEvents: string[] = ["enemy:attack"];
-    if (outE.flags.miss) eEvents.push("enemy:miss");
-    else {
-      if (outE.flags.crit) eEvents.push("enemy:crit");
-      if (outE.flags.blocked) eEvents.push("player:block");
-      eEvents.push("enemy:hit", "enemy:hit:physical");
+    const ev = it.event as TLIn["event"];
+    const commonTags = Array.isArray(it.tags) ? it.tags.slice(0, 12) : Array.isArray(it.events) ? it.events.slice(0, 12) : [];
+
+    // si es un evento de habilidad, lo preservamos y default damage=0 si no vino
+    if (ev === "passive_proc" || ev === "ultimate_cast") {
+      return {
+        turn,
+        source,
+        event: ev,
+        damage: Math.max(0, toInt(it.damage, 0)),
+        attackerHP,
+        defenderHP,
+        ability: it.ability
+          ? {
+              kind: it.ability.kind === "ultimate" ? "ultimate" : "passive",
+              name: it.ability.name,
+              id: it.ability.id,
+              durationTurns: toInt(it.ability.durationTurns, undefined as any),
+            }
+          : undefined,
+        tags: commonTags,
+      };
     }
-    log.push(`⚡ ${enemy.name} ataca e inflige ${outE.damage} de daño.`);
-    log.push(`💔 ${player.name} HP restante: ${Math.max(0, player.currentHP)}`);
-    snapshots.push({
-      round,
-      actor: "enemy",
-      damage: outE.damage,
-      playerHP: Math.max(0, player.currentHP),
-      enemyHP: Math.max(0, enemy.currentHP),
-      events: eEvents,
-      // status: undefined,
+
+    // eventos de golpeo
+    const event: "hit" | "crit" | "block" | "miss" = (ev as any) ?? (toInt(it.damage, 0) > 0 ? "hit" : "miss");
+    const damage = Math.max(0, toInt(it.damage, 0));
+
+    return {
+      turn,
+      source,
+      event,
+      damage,
+      attackerHP,
+      defenderHP,
+      tags: commonTags,
+    };
+  });
+}
+
+/* ---------------- GET /combat/simulate (preview público) ---------------- */
+export const simulateCombatPreviewController: RequestHandler = async (req, res) => {
+  try {
+    const matchId = String(req.query.matchId || "");
+    if (!matchId || !Types.ObjectId.isValid(matchId)) {
+      return res.status(400).json({ ok: false, message: "matchId inválido" });
+    }
+
+    const match = await Match.findById(matchId).lean();
+    if (!match) return res.status(404).json({ ok: false, message: "Match no encontrado" });
+
+    const { outcome, timeline, log, snapshots } = runPvp({
+      attackerSnapshot: (match as any).attackerSnapshot,
+      defenderSnapshot: (match as any).defenderSnapshot,
+      seed: (match as any).seed,
+      maxRounds: 30,
     });
 
-    round++;
+    console.log("[PVP][GET/preview] outcome:", outcome, "turns:", (timeline ?? []).length);
+    console.log("[PVP][GET/preview] snapshots.len =", (snapshots ?? []).length);
+
+    return res.json({
+      ok: true,
+      outcome,
+      turns: (timeline ?? []).length,
+      timeline, // crudo del runner (útil para animaciones de preview)
+      log,
+      snapshots,
+      runnerVersion: RUNNER_VERSION,
+    });
+  } catch (err) {
+    console.error("GET /combat/simulate (preview) error:", err);
+    return res.status(500).json({ ok: false, message: "Error interno" });
   }
+};
 
-  log.push("🏁 Fin del combate 🏁");
-  const raw = (player.currentHP <= 0 ? "enemy" : enemy.currentHP <= 0 ? "player" : null) as "player" | "enemy" | null;
-  const winner: "player" | "enemy" = raw ?? (enemy.currentHP <= 0 ? "player" : "enemy");
-  log.push(`🥇 Ganador: ${winner === "player" ? player.name : enemy.name}`);
+/* ---------------- POST /combat/simulate (preview, auth) ---------------- */
+export const simulateCombatController: RequestHandler = async (req, res) => {
+  console.log("hace /combat/simulate backend");
+  try {
+    const { matchId } = req.body as { matchId?: string };
+    if (!matchId || !Types.ObjectId.isValid(matchId)) {
+      return res.status(400).json({ ok: false, message: "matchId inválido" });
+    }
 
-  if (DBG) console.log("[SIM] Fin combate:", { winner, rounds: round, snapshots: snapshots.length });
+    const match = await Match.findById(matchId).lean();
+    if (!match) return res.status(404).json({ ok: false, message: "Match no encontrado" });
 
-  return { winner, turns: round, log, snapshots };
-}
+    const { outcome, timeline, log, snapshots } = runPvp({
+      attackerSnapshot: (match as any).attackerSnapshot,
+      defenderSnapshot: (match as any).defenderSnapshot,
+      seed: (match as any).seed,
+      maxRounds: 30,
+    });
+
+    console.log("[PVP][POST/sim] outcome:", outcome, "turns:", (timeline ?? []).length);
+    console.log("[PVP][POST/sim] snapshots.len =", (snapshots ?? []).length);
+
+    return res.json({
+      ok: true,
+      outcome,
+      turns: (timeline ?? []).length,
+      timeline,
+      log,
+      snapshots,
+      runnerVersion: RUNNER_VERSION,
+    });
+  } catch (err) {
+    console.error("POST /combat/simulate error:", err);
+    return res.status(500).json({ ok: false, message: "Error interno" });
+  }
+};
+
+/* ---------------- POST /combat/resolve (auth, PERSISTE + cobra stamina) ---------------- */
+export const resolveCombatController: RequestHandler = async (req, res) => {
+  console.log("/combat/resolve..backend");
+  try {
+    const callerUserId = req.user?.id;
+    if (!callerUserId) return res.status(401).json({ ok: false, message: "No autenticado" });
+
+    const { matchId } = req.body as { matchId?: string };
+    if (!matchId || !Types.ObjectId.isValid(matchId)) {
+      return res.status(400).json({ ok: false, message: "matchId inválido" });
+    }
+
+    const match = await Match.findById(matchId);
+    if (!match) return res.status(404).json({ ok: false, message: "Match no encontrado" });
+
+    const mAny = match as any;
+
+    // Ya resuelto → devolvemos lo persistido
+    if (mAny.status === "resolved") {
+      const storedOutcome = (mAny.outcome ?? "draw") as "attacker" | "defender" | "draw";
+      const outcomeForAttacker: "win" | "lose" | "draw" = storedOutcome === "attacker" ? "win" : storedOutcome === "defender" ? "lose" : "draw";
+
+      return res.json({
+        ok: true,
+        outcome: outcomeForAttacker,
+        rewards: mAny.rewards ?? {},
+        timeline: Array.isArray(mAny.timeline) ? mAny.timeline : [],
+        snapshots: Array.isArray(mAny.snapshots) ? mAny.snapshots : [],
+        log: Array.isArray(mAny.log) ? mAny.log : [],
+        turns: Number(mAny.turns ?? mAny.timeline?.length ?? 0),
+        alreadyResolved: true,
+        runnerVersion: Number(mAny.runnerVersion ?? RUNNER_VERSION),
+      });
+    }
+
+    // 💥 Cobro stamina SOLO al usuario que ejecuta el resolve (atacante normalmente)
+    const spent = await spendStamina(callerUserId, STAMINA_COST_PVP);
+    if (!spent.ok) {
+      const snap = await getStaminaByUserId(callerUserId).catch(() => null);
+      return res.status(400).json({
+        ok: false,
+        message: "Stamina insuficiente",
+        required: STAMINA_COST_PVP,
+        stamina: snap || undefined,
+        reason: (spent as any).reason,
+      });
+    }
+
+    // Simulación y persistencia
+    const { outcome, timeline, log, snapshots } = runPvp({
+      attackerSnapshot: mAny.attackerSnapshot,
+      defenderSnapshot: mAny.defenderSnapshot,
+      seed: mAny.seed,
+      maxRounds: 30,
+    });
+
+    console.log("[PVP][POST/resolve] outcome:", outcome, "turns:", (timeline ?? []).length);
+    console.log("[PVP][POST/resolve] snapshots.len =", (snapshots ?? []).length);
+
+    const timelineNorm = normalizeTimeline(timeline);
+    const rw = computePvpRewards(outcome);
+
+    const att = mAny.attackerSnapshot || {};
+    const def = mAny.defenderSnapshot || {};
+    await Promise.all([applyRewardsToCharacter(att.characterId, att.userId, rw.attacker), applyRewardsToCharacter(def.characterId, def.userId, rw.defender)]);
+
+    mAny.status = "resolved";
+    mAny.outcome = mapOutcomeForMatch(outcome);
+    mAny.winner = outcome === "win" ? "player" : outcome === "lose" ? "enemy" : "draw";
+    mAny.turns = timelineNorm.length;
+    mAny.rewards = {
+      xp: rw.responseForAttacker.xpGained,
+      gold: rw.responseForAttacker.goldGained,
+      honor: rw.responseForAttacker.honorDelta,
+    };
+    mAny.timeline = timelineNorm;
+    mAny.snapshots = Array.isArray(snapshots) ? snapshots : [];
+    mAny.log = Array.isArray(log) ? log : [];
+    mAny.runnerVersion = RUNNER_VERSION;
+
+    await match.save();
+
+    return res.json({
+      ok: true,
+      outcome,
+      rewards: rw.responseForAttacker,
+      timeline: timelineNorm,
+      snapshots,
+      log,
+      turns: timelineNorm.length,
+      staminaAfter: spent.after, // snapshot de stamina luego de cobrar
+      runnerVersion: RUNNER_VERSION,
+    });
+  } catch (err: any) {
+    console.error("POST /combat/resolve error:", err?.name, err?.message);
+    if (err?.errors) {
+      for (const [k, v] of Object.entries(err.errors)) {
+        console.error(`[resolve][validation] ${k}:`, (v as any)?.message);
+      }
+    }
+    return res.status(500).json({ ok: false, message: "Error interno" });
+  }
+};

@@ -1,4 +1,5 @@
 // src/controllers/auth.controller.ts
+/* eslint-disable no-console */
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
@@ -16,16 +17,30 @@ function escapeRegex(s: string) {
 /** Para login: incluimos hash y campos mínimos */
 const USER_LOGIN_PROJECTION = "+password +passwordHash email username classChosen characterClass";
 
+/**
+ * POST /auth/register
+ * body: { username, email, password, characterClass }
+ *
+ * Crea User + Character en una transacción.
+ * - Character toma stats/resistances/combatStats desde la clase
+ * - currentHP = maxHP
+ * - equipment.mainWeapon = defaultWeapon
+ * - skillState inicial (ultimate lista; passiveBuff null)
+ * - stamina inicial (100/100) y marca de tiempo para regen perezosa
+ */
 export const register = async (req: Request, res: Response) => {
   const { username, email, password, characterClass } = req.body as {
     username?: string;
     email?: string;
     password?: string;
-    characterClass?: string;
+    characterClass?: string; // _id de CharacterClass
   };
 
   if (!username || !email || !password || !characterClass) {
     return res.status(400).json({ message: "Faltan campos requeridos" });
+  }
+  if (!mongoose.Types.ObjectId.isValid(characterClass)) {
+    return res.status(400).json({ message: "characterClass inválido" });
   }
 
   const secret = process.env.JWT_SECRET;
@@ -63,7 +78,7 @@ export const register = async (req: Request, res: Response) => {
         {
           username: usernameNorm,
           email: emailNorm,
-          password: passwordHash, // campo actual; mantenemos compat con passwordHash legacy en login
+          password: passwordHash, // campo actual (guardado hasheado)
           classChosen: true,
           characterClass: clazz._id,
         },
@@ -71,19 +86,82 @@ export const register = async (req: Request, res: Response) => {
       { session }
     ).then((r) => r[0]);
 
-    // Crear personaje base
+    // Bloques base clonados
+    const stats = { ...clazz.baseStats };
+    const resistances = { ...clazz.resistances };
+    const combatStats = { ...clazz.combatStats };
+
+    // Vida inicial = tope
+    const currentHP = Math.max(1, Number(combatStats.maxHP ?? 1));
+
+    // Equipo inicial: arma por defecto de la clase
+    const equipment = {
+      helmet: null,
+      chest: null,
+      gloves: null,
+      boots: null,
+      mainWeapon: clazz.defaultWeapon ?? null,
+      offWeapon: null,
+      ring: null,
+      belt: null,
+      amulet: null,
+    } as const;
+
+    // Estado de skills en runtime (no aplicamos buff aún)
+    const skillState = {
+      passiveBuff: null,
+      ultimate: clazz.ultimateSkill?.enabled ? { name: clazz.ultimateSkill.name, cooldownLeft: 0, silencedUntilTurn: null } : null,
+    };
+
+    // Stamina inicial (alineada con chooseClass)
+    const now = new Date();
+    const STAMINA_DEFAULTS = {
+      stamina: 100,
+      staminaMax: 100,
+      staminaRegenPerHour: 10, // si luego prefieres “lleno en 24h exacto”, pon 0 y el servicio hace need/24h
+    } as const;
+
+    // Crear personaje
     await Character.create(
       [
         {
           userId: newUser._id,
           classId: clazz._id,
+
+          // progresión
           level: 1,
           experience: 0,
-          stats: clazz.baseStats,
-          resistances: clazz.resistances,
-          combatStats: clazz.combatStats,
-          passivesUnlocked: [clazz.passiveDefault?.name].filter(Boolean),
-        },
+
+          // bloques
+          stats,
+          resistances,
+          combatStats,
+
+          // vida
+          maxHP: combatStats.maxHP,
+          currentHP,
+
+          // equipo/inventario
+          equipment,
+          inventory: [],
+
+          // runtime skills
+          skillState,
+
+          // economía
+          gold: 0,
+          honor: 0,
+
+          // stamina
+          stamina: STAMINA_DEFAULTS.stamina,
+          staminaMax: STAMINA_DEFAULTS.staminaMax,
+          staminaRegenPerHour: STAMINA_DEFAULTS.staminaRegenPerHour,
+          staminaUpdatedAt: now, // para regen perezosa
+          // nextStaminaFullAt: se calculará en la primera lectura del servicio
+
+          // subclase aún sin seleccionar
+          subclassId: null,
+        } as any,
       ],
       { session }
     );
@@ -103,7 +181,7 @@ export const register = async (req: Request, res: Response) => {
       classChosen: true,
       characterClass: clazz._id, // lo que usa tu front
       characterClassId: clazz._id, // alias por si algo viejo lo lee
-      characterClassName: clazz.name,
+      characterClassName: clazz.name, // útil para UI
     });
   } catch (err: any) {
     if (DBG) console.error("Register error:", err);
@@ -119,11 +197,14 @@ export const register = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * POST /auth/login
+ * body: { email, password }
+ *
+ * Mantiene compat con passwordHash legacy y devuelve metadatos de clase.
+ */
 export const login = async (req: Request, res: Response) => {
-  const { email, password } = req.body as {
-    email?: string;
-    password?: string;
-  };
+  const { email, password } = req.body as { email?: string; password?: string };
 
   if (!email || !password) {
     return res.status(400).json({ message: "Faltan campos requeridos" });
@@ -140,6 +221,7 @@ export const login = async (req: Request, res: Response) => {
   // 1) Búsqueda directa por email normalizado
   let user = (await User.findOne({ email: emailNorm }).select(USER_LOGIN_PROJECTION).lean()) || null;
 
+  // 2) Fallback case-insensitive por regex
   if (!user) {
     const rx = new RegExp(`^${escapeRegex(emailNorm)}$`, "i");
     user = (await User.findOne({ email: rx }).select(USER_LOGIN_PROJECTION).lean()) || null;
@@ -191,7 +273,7 @@ export const login = async (req: Request, res: Response) => {
       username: (user as any).username ?? null,
     },
     classChosen: !!(user as any).classChosen,
-    characterClass: (user as any).characterClass ?? null, // lo que tu front espera
+    characterClass: (user as any).characterClass ?? null, // id de clase para front
     characterClassId: (user as any).characterClass ?? null, // alias
     characterClassName: className,
   });

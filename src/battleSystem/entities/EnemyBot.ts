@@ -6,6 +6,8 @@ import { BaseStats, Resistances, CombatStats } from "../../interfaces/character/
  * Igual que el player, pero te permite luego agregar IA, skills, etc.
  */
 export class EnemyBot implements CombatEntity {
+  public combat: CombatStats; // requerido por CombatEntity (alias de combatStats)
+
   constructor(
     public id: string,
     public name: string,
@@ -14,7 +16,10 @@ export class EnemyBot implements CombatEntity {
     public resistances: Resistances,
     public combatStats: CombatStats,
     public currentHP: number = combatStats.maxHP
-  ) {}
+  ) {
+    // Alias para cumplir la interfaz sin romper usos existentes de combatStats
+    this.combat = combatStats;
+  }
 
   takeDamage(amount: number): void {
     this.currentHP = Math.max(0, this.currentHP - amount);

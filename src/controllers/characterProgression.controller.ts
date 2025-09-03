@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { Request, Response } from "express";
 import { Character } from "../models/Character";
 import { computeProgression } from "../services/progression.service";
@@ -29,9 +30,12 @@ export const getProgression = async (req: Request, res: Response) => {
       xpToNext: p.xpToNext,
       xpPercent: p.xpPercentInt, // entero 0..100
       isMaxLevel: p.isMaxLevel,
+      pendingLevels: p.pendingLevels,
     });
   } catch (err) {
     console.error("getProgression error:", err);
     return res.status(500).json({ message: "Error interno" });
   }
 };
+
+export default getProgression;

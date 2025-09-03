@@ -9,15 +9,15 @@ export interface ItemDocument extends ItemInterface, Document<Types.ObjectId> {
 
 // 👇 Lean tipado (lo vas a usar en controllers con .lean({ virtuals:true }))
 export type ItemLean = mongoose.InferSchemaType<typeof ItemSchema> & {
-  _id: Types.ObjectId; // viene en lean()
-  id?: string; // virtual agregado por toJSON/toObject si lo pedís
+  _id: Types.ObjectId;
+  id?: string;
 };
 
 // ----- Sub-esquemas -----
 const ModSchema = new Schema<Mod>(
   {
     scope: { type: String, enum: ["stat", "combat", "special"], required: true },
-    key: { type: String, required: true },
+    key: { type: String, required: true, trim: true },
     mode: { type: String, enum: ["add", "mul_bp"], required: true },
     value: { type: Number, required: true },
     min: { type: Number },
@@ -28,13 +28,16 @@ const ModSchema = new Schema<Mod>(
 
 const WeaponSchema = new Schema<WeaponData>(
   {
-    slug: { type: String, required: true },
+    slug: { type: String, required: true, trim: true },
     type: { type: String, enum: ["sword", "dagger", "bow", "staff", "axe", "mace", "spear", "wand", "crossbow"], required: true },
     hands: { type: Number, enum: [1, 2], default: 1 },
-    damage: { min: { type: Number, required: true }, max: { type: Number, required: true } },
-    speed: { type: Number, default: 100 },
+    damage: {
+      min: { type: Number, required: true, min: 0 },
+      max: { type: Number, required: true, min: 1 },
+    },
+    speed: { type: Number, default: 100, min: 1 },
     critBonus_bp: { type: Number, default: 0, min: 0, max: 10000 },
-    range: { type: Number, default: 0 },
+    range: { type: Number, default: 0, min: 0 },
   },
   { _id: false }
 );
@@ -43,25 +46,28 @@ const OffHandSchema = new Schema<OffHandData>(
   {
     type: { type: String, enum: ["shield", "quiver", "focus", "dagger", "tome"], required: true },
     blockChance_bp: { type: Number, min: 0, max: 10000 },
-    blockValue: { type: Number },
-    damage: { min: { type: Number }, max: { type: Number } },
+    blockValue: { type: Number, min: 0 },
+    damage: {
+      min: { type: Number, min: 0 },
+      max: { type: Number, min: 0 },
+    },
   },
   { _id: false }
 );
 
 const ArmorDataSchema = new Schema<ArmorData>(
   {
-    armor: { type: Number, required: true },
+    armor: { type: Number, required: true, min: 0 },
     blockChance_bp: { type: Number, min: 0, max: 10000 },
-    blockValue: { type: Number },
+    blockValue: { type: Number, min: 0 },
   },
   { _id: false }
 );
 
 const AffixSchema = new Schema<Affix>(
   {
-    slug: { type: String, required: true },
-    tier: { type: Number, required: true },
+    slug: { type: String, required: true, trim: true },
+    tier: { type: Number, required: true, min: 0 },
     mods: { type: [ModSchema], default: [] },
   },
   { _id: false }
@@ -70,19 +76,24 @@ const AffixSchema = new Schema<Affix>(
 // ---------------- Esquema principal ----------------
 const ItemSchema = new Schema<ItemDocument>(
   {
-    slug: { type: String, required: true, unique: true, index: true },
-    name: { type: String, required: true },
+    slug: { type: String, required: true, unique: true, index: true, trim: true },
+    name: { type: String, required: true, trim: true },
     description: { type: String },
 
     type: { type: String, enum: ["weapon", "armor", "accessory", "potion", "material"], required: true },
-    slot: { type: String, enum: ["helmet", "chest", "gloves", "boots", "mainWeapon", "offWeapon", "ring", "belt", "amulet"], required: true },
+    slot: {
+      type: String,
+      enum: ["helmet", "chest", "gloves", "boots", "mainWeapon", "offWeapon", "ring", "belt", "amulet"],
+      required: true,
+    },
     rarity: { type: String, enum: ["common", "uncommon", "rare", "epic", "legendary"], required: true },
 
-    iconUrl: { type: String, required: true },
+    iconUrl: { type: String, required: true, trim: true },
 
-    weapon: { type: WeaponSchema, required: false },
-    offHand: { type: OffHandSchema, required: false },
-    armorData: { type: ArmorDataSchema, required: false },
+    // Subdocumentos (asignación directa del schema)
+    weapon: WeaponSchema, // requerido condicionalmente en pre("validate")
+    offHand: OffHandSchema, // opcional
+    armorData: ArmorDataSchema, // opcional
 
     mods: { type: [ModSchema], default: [] },
 
@@ -94,11 +105,11 @@ const ItemSchema = new Schema<ItemDocument>(
     rollSeed: { type: Number },
     rolled: { type: Schema.Types.Mixed },
 
-    levelRequirement: { type: Number, default: 1 },
-    sellPrice: { type: Number, default: 0 },
+    levelRequirement: { type: Number, default: 1, min: 1 },
+    sellPrice: { type: Number, default: 0, min: 0 },
     tradable: { type: Boolean, default: true },
     durable: { type: Boolean, default: false },
-    durability: { type: Number, default: 100 },
+    durability: { type: Number, default: 100, min: 0 },
 
     classRestriction: { type: [String], default: [] },
     tags: { type: [String], default: [] },
@@ -107,12 +118,10 @@ const ItemSchema = new Schema<ItemDocument>(
     isBound: { type: Boolean, default: false },
     isCraftable: { type: Boolean, default: false },
     isConsumable: { type: Boolean, default: false },
-
-    createdAt: { type: Date, default: Date.now },
-    modifiedAt: { type: Date, default: Date.now },
   },
   {
     versionKey: false,
+    timestamps: { createdAt: "createdAt", updatedAt: "modifiedAt" },
     toJSON: {
       virtuals: true,
       transform: (_doc, ret) => {
@@ -137,9 +146,26 @@ ItemSchema.virtual("id").get(function (this: { _id: Types.ObjectId }) {
   return this._id.toString();
 });
 
-// Mantener modifiedAt actualizado
-ItemSchema.pre("save", function (next) {
-  (this as any).modifiedAt = new Date();
+// Normalizaciones y validaciones cross-field
+ItemSchema.pre("validate", function (next) {
+  const self: any = this;
+
+  // Si viene mainWeapon mal tipado, lo normalizamos
+  if (self.slot === "mainWeapon" && self.type !== "weapon") {
+    self.type = "weapon";
+  }
+
+  // Requisito condicional de weapon para mainWeapon reales
+  if (self.slot === "mainWeapon" && self.type === "weapon" && !self.weapon) {
+    self.invalidate("weapon", "weapon is required for items in slot 'mainWeapon'.");
+  }
+
+  // Validación min <= max en daño del arma (si existe)
+  const d = self.weapon?.damage;
+  if (d && typeof d.min === "number" && typeof d.max === "number" && d.min > d.max) {
+    self.invalidate("weapon.damage.max", "weapon.damage.max must be >= weapon.damage.min");
+  }
+
   next();
 });
 

@@ -1,5 +1,6 @@
 // src/battleSystem/core/CombatManager.ts
 import type { WeaponData } from "./Weapon";
+import { isPrimaryWeapon, PRIMARY_WEAPON_BONUS_MULT } from "./Weapon";
 
 export interface ManagerOpts {
   rng?: () => number; // PRNG [0,1)
@@ -13,6 +14,14 @@ export interface ManagerOpts {
 const DEBUG_MAN = false;
 
 // ───────────────────────────────────────────────────────────────────────────────
+// Constantes de balance (ajustables)
+// ───────────────────────────────────────────────────────────────────────────────
+const OFFHAND_WEAPON_CONTRIB = 0.35; // 35% del roll de su arma (apoyo)
+const OFFHAND_FOCUS_CONTRIB = 0.15; // 15% del roll si es focus (muy leve)
+const SHIELD_BLOCK_BONUS = 0.05; // +5% block si el defensor tiene escudo en offhand
+const SHIELD_DR_BONUS = 0.03; // +3% DR si el defensor tiene escudo en offhand
+
+// ───────────────────────────────────────────────────────────────────────────────
 // Utils
 // ───────────────────────────────────────────────────────────────────────────────
 const num = (v: unknown, d = 0) => {
@@ -21,7 +30,6 @@ const num = (v: unknown, d = 0) => {
 };
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
-/** PRNG determinístico (mulberry32) */
 function makeSeededRng(seed: number): () => number {
   let t = seed >>> 0 || 1;
   return () => {
@@ -34,7 +42,6 @@ function makeSeededRng(seed: number): () => number {
 
 export type SideKey = "player" | "enemy";
 
-/** Entidad mínima para el manager de combate */
 export interface CombatSide {
   name: string;
   className?: string;
@@ -58,9 +65,14 @@ export interface CombatSide {
     maxHP?: number;
   };
 
-  // Armas (solo nos interesan minDamage / maxDamage)
+  // Armas normalizadas
   weaponMain?: WeaponData;
   weaponOff?: WeaponData | null;
+
+  // Metadatos de clase (para bonus por arma primaria)
+  classMeta?: {
+    primaryWeapons?: string[];
+  };
 }
 
 export interface AttackFlags {
@@ -74,51 +86,14 @@ export interface AttackOutput {
   extra?: { offhandUsed?: boolean };
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Ajustes de “pasivas suaves” por clase (si no querés usarlas, ponelos en 0)
-// ───────────────────────────────────────────────────────────────────────────────
-const PassiveTweaks = {
-  offensiveStatic: (cls?: string) => {
-    const c = (cls || "").toLowerCase();
-    return {
-      // Mago convierte parte del magicPower a daño base simple
-      magicToDamage: c.includes("mago") ? 0.3 : 0,
-      // Asesino: +30% al bonus de crítico
-      critBonusAdd: c.includes("asesino") ? 0.3 : 0,
-      // Chance extra de crítico (dejado en 0)
-      critChanceAdd: 0,
-      // Multiplicador ofensivo genérico
-      damageMult: 1.0,
-    };
-  },
-  defensiveStatic: (cls?: string) => {
-    const c = (cls || "").toLowerCase();
-    return {
-      // Guerrero más tanque
-      damageReductionAdd: c.includes("guerrero") ? 0.05 : 0,
-      blockAdd: c.includes("guerrero") ? 0.03 : 0,
-    };
-  },
-};
-
-// ───────────────────────────────────────────────────────────────────────────────
-// CombatManager
-// ───────────────────────────────────────────────────────────────────────────────
 export class CombatManager {
-  public player: CombatSide; // atacante
-  public enemy: CombatSide; // defensor
+  public player: CombatSide;
+  public enemy: CombatSide;
 
   private rng: () => number;
   private opts: Required<Pick<ManagerOpts, "maxRounds" | "blockReduction" | "critMultiplierBase" | "damageJitter">> & ManagerOpts;
 
-  private rounds: number = 0;
-
-  // Ramping por clase (Mago/Arquero): escala con el tiempo
-  private ramp: Record<SideKey, { mage: number; archer: number }> = {
-    player: { mage: 0, archer: 0 },
-    enemy: { mage: 0, archer: 0 },
-  };
-
+  private rounds = 0;
   private dbgCount = 0;
 
   constructor(attackerLike: any, defenderLike: any, optsOrSeed?: number | ManagerOpts) {
@@ -134,9 +109,13 @@ export class CombatManager {
     const provided: ManagerOpts = typeof optsOrSeed === "number" ? { seed: optsOrSeed } : optsOrSeed ?? {};
     this.rng = provided.rng ?? (typeof provided.seed === "number" ? makeSeededRng(provided.seed) : Math.random);
     this.opts = { ...defaults, ...provided };
+
+    // Seguridad: fists si no hay arma
+    this.player.weaponMain = this.player.weaponMain || { slug: "fists", minDamage: 1, maxDamage: 3, type: "physical", category: "weapon", hands: 1 };
+    this.enemy.weaponMain = this.enemy.weaponMain || { slug: "fists", minDamage: 1, maxDamage: 3, type: "physical", category: "weapon", hands: 1 };
   }
 
-  startRound(turn: number, onStart?: (state: { turn: number; playerHP: number; enemyHP: number }) => void) {
+  startRound(turn: number, onStart?: (s: { turn: number; playerHP: number; enemyHP: number }) => void) {
     if (turn % 2 === 1) this.rounds++;
     onStart?.({ turn, playerHP: this.player.currentHP, enemyHP: this.enemy.currentHP });
   }
@@ -161,14 +140,13 @@ export class CombatManager {
     return null;
   }
 
-  /** Tira un entero uniforme entre [minDamage, maxDamage] del arma (si existe) */
+  /** Roll entero según min/max del arma */
   private rollWeapon(w?: WeaponData | null): number {
     if (!w) return 0;
     const lo = Math.max(0, Math.floor((w as any).minDamage || 0));
     const hi = Math.max(lo, Math.floor((w as any).maxDamage || 0));
     if (hi <= lo) return lo;
-    const r = this.rng();
-    return Math.floor(lo + r * (hi - lo + 1)); // entero
+    return Math.floor(lo + this.rng() * (hi - lo + 1));
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -178,77 +156,70 @@ export class CombatManager {
     const A = attackerKey === "player" ? this.player : this.enemy;
     const D = defenderKey === "player" ? this.player : this.enemy;
 
-    const off = PassiveTweaks.offensiveStatic(A.className);
-    const def = PassiveTweaks.defensiveStatic(D.className);
-
-    // Evasión del defensor
+    // 1) Evasión
     const ev = clamp01(num(D.combat.evasion, 0));
-    const rEv = this.rng();
-    if (DEBUG_MAN && this.dbgCount < 2) {
-      console.log("[MAN] evasion=", ev, "blockChance=", D.combat.blockChance, "critChance=", A.combat.criticalChance, "atk=", A.combat.attackPower, "dr=", D.combat.damageReduction);
-      console.log("[MAN] rEv=", rEv);
-    }
-    if (rEv < ev) {
-      this.dbgCount++;
-      return { damage: 0, flags: { miss: true } };
-    }
+    if (this.rng() < ev) return { damage: 0, flags: { miss: true } };
 
-    // Block del defensor
-    const blockChance = clamp01(num(D.combat.blockChance, 0) + def.blockAdd);
+    // 2) Shield bonuses (defensa por offhand escudo)
+    const defHasShield = (D.weaponOff?.category ?? "").toLowerCase() === "shield";
+    const blockChanceBase = clamp01(num(D.combat.blockChance, 0));
+    const blockChance = clamp01(blockChanceBase + (defHasShield ? SHIELD_BLOCK_BONUS : 0));
     const blocked = this.rng() < blockChance;
 
-    // Crítico del atacante
-    const critChance = clamp01(num(A.combat.criticalChance, 0.05) + off.critChanceAdd);
+    // 3) Crit
+    const critChance = clamp01(num(A.combat.criticalChance, 0.05));
     const isCrit = this.rng() < critChance;
 
-    // ----- Daño base por armas -----
-    const mainRoll = this.rollWeapon(A.weaponMain);
+    // 4) Daño base por arma principal
+    let mainRoll = this.rollWeapon(A.weaponMain);
+    // bonus si arma es primaria para la clase
+    if (isPrimaryWeapon(A.weaponMain, A.classMeta?.primaryWeapons)) {
+      mainRoll = Math.floor(mainRoll * PRIMARY_WEAPON_BONUS_MULT);
+    }
 
-    // offhand (si existe): aporta un 60% de su propia tirada (entero)
+    // 5) Aporte de offhand (según categoría)
     let offhandUsed = false;
     let offRollPart = 0;
     if (A.weaponOff) {
-      const r = this.rollWeapon(A.weaponOff);
-      offRollPart = Math.floor((r * 60) / 100);
-      if (offRollPart > 0) offhandUsed = true;
+      const cat = (A.weaponOff.category ?? "weapon").toLowerCase();
+      if (cat === "weapon") {
+        const r = this.rollWeapon(A.weaponOff);
+        offRollPart = Math.floor(r * OFFHAND_WEAPON_CONTRIB);
+        if (offRollPart > 0) offhandUsed = true;
+      } else if (cat === "focus") {
+        const r = this.rollWeapon(A.weaponOff);
+        offRollPart = Math.floor(r * OFFHAND_FOCUS_CONTRIB);
+        if (offRollPart > 0) offhandUsed = true;
+      }
+      // shield => no añade daño
     }
 
-    // AP + (parte de MP si "mago")
-    let dmg = 0;
-    dmg += mainRoll;
-    dmg += offRollPart;
-    dmg += Math.max(0, Math.floor(num(A.combat.attackPower, 0)));
-    if (off.magicToDamage > 0) {
-      const mp = Math.max(0, Math.floor(num(A.combat.magicPower, 0)));
-      dmg += Math.floor(mp * off.magicToDamage); // se trunca
-    }
-
-    // Variación ±jitter
+    // 6) AP + variación (jitter)
+    let dmg = mainRoll + offRollPart + Math.max(0, Math.floor(num(A.combat.attackPower, 0)));
     const j = clamp01(num(this.opts.damageJitter, 0.15));
-    const jitter = 1 - j + this.rng() * (2 * j);
-    dmg = Math.floor(dmg * jitter);
+    dmg = Math.floor(dmg * (1 - j + this.rng() * (2 * j)));
 
-    // Crítico
+    // 7) Crítico
     if (isCrit) {
       const baseCrit = Math.max(0, num(A.combat.criticalDamageBonus, this.opts.critMultiplierBase));
-      dmg = Math.floor(dmg * (1 + baseCrit + off.critBonusAdd));
+      dmg = Math.floor(dmg * (1 + baseCrit));
     }
 
-    // Mitigación por bloqueo
-    if (blocked) {
-      dmg = Math.floor(dmg * (1 - this.opts.blockReduction));
-    }
+    // 8) Bloqueo
+    if (blocked) dmg = Math.floor(dmg * (1 - this.opts.blockReduction));
 
-    // Reducción de daño del defensor
-    let dr = clamp01(num(D.combat.damageReduction, 0) + def.damageReductionAdd);
+    // 9) Reducción de daño (con bonus por escudo)
+    const drBase = clamp01(num(D.combat.damageReduction, 0));
+    const dr = clamp01(drBase + (defHasShield ? SHIELD_DR_BONUS : 0));
     dmg = Math.floor(dmg * (1 - dr));
 
+    // 10) Aplicar daño
     const finalDmg = Math.max(0, Math.floor(dmg));
     D.currentHP = Math.max(0, D.currentHP - finalDmg);
 
-    if (DEBUG_MAN && this.dbgCount < 2) {
+    if (DEBUG_MAN && this.dbgCount++ < 2) {
+      // eslint-disable-next-line no-console
       console.log("[MAN] blocked=", blocked, "crit=", isCrit, "finalDmg=", finalDmg, "D.hp=", D.currentHP);
-      this.dbgCount++;
     }
     return { damage: finalDmg, flags: { miss: false, blocked, crit: isCrit }, extra: { offhandUsed } };
   }

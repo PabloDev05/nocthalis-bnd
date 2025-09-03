@@ -1,3 +1,4 @@
+// src/services/progression.service.ts
 /** Nivel máximo (entero). Si no está en env, usa 100. */
 export const MAX_LEVEL: number = (() => {
   const raw = process.env.MAX_LEVEL;
@@ -53,7 +54,7 @@ export function computeProgression(experience: number, levelInDb: number, maxLev
   let xpSinceLevel = Math.max(0, exp - currentLevelAt); // progreso dentro del nivel
   if (isMaxLevel) xpSinceLevel = Math.min(xpSinceLevel, xpForThisLevel);
 
-  const xpToNext = isMaxLevel ? 0 : Math.max(0, nextLevelAt - exp); // lo que falta
+  const xpToNext = isMaxLevel ? 0 : Math.max(0, nextLevelAt - exp);
 
   // Porcentaje entero 0..100 (sin floats)
   const xpPercentInt = isMaxLevel ? 100 : Math.min(100, Math.trunc((xpSinceLevel * 100) / xpForThisLevel));
