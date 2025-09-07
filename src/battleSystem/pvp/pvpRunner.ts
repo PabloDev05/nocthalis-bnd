@@ -3,10 +3,9 @@ import { CombatManager } from "../core/CombatManager";
 import type { WeaponData } from "../core/Weapon";
 import { normalizeWeaponData, ensureWeaponOrDefault } from "../core/Weapon";
 import { mulberry32 } from "../core/RngFightSeed";
-import { buildClassPassivePack } from "../passives/ClassPacks";
 
 /* ───────── Tipos del runner ───────── */
-export type TimelineEvent = "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast";
+export type TimelineEvent = "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast" | "dot_tick"; // ← nuevo: ticks de DoT (sangre/veneno/quemadura)
 
 export interface TimelineEntry {
   turn: number;
@@ -26,7 +25,7 @@ export interface TimelineEntry {
 
 export interface PvpFightResult {
   outcome: "win" | "lose" | "draw";
-  turns: number; // ← ahora son sólo impactos
+  turns: number; // solo impactos (hit/crit/block/miss)
   timeline: TimelineEntry[];
   log: string[];
   snapshots: Array<{
@@ -50,13 +49,12 @@ const pctToFrac = (v: any) => {
   return n > 1 ? n / 100 : n < 0 ? 0 : n;
 };
 const i = (n: any, def = 0) => (Number.isFinite(Number(n)) ? Number(n) : def);
-const i0 = (n: any) => Math.max(0, Math.floor(i(n, 0)));
 const clampInt = (n: any, min: number, max: number) => {
   const v = Math.round(i(n, min));
   return Math.max(min, Math.min(max, v));
 };
 
-function flagsToEvent(flags: { miss?: boolean; crit?: boolean; blocked?: boolean }): TimelineEvent {
+function flagsToEvent(flags: { miss?: boolean; crit?: boolean; blocked?: boolean }): Exclude<TimelineEvent, "passive_proc" | "ultimate_cast" | "dot_tick"> {
   if (flags?.miss) return "miss";
   if (flags?.blocked) return "block";
   if (flags?.crit) return "crit";
@@ -66,82 +64,18 @@ function isImpactEvent(ev: TimelineEvent) {
   return ev === "hit" || ev === "crit" || ev === "block" || ev === "miss";
 }
 
-/* ───────── lectura de skills Fate-driven ───────── */
-type TriggerCheck = "onBasicHit" | "onRangedHit" | "onSpellCast" | "onHitOrBeingHit" | "onTurnStart";
-type ProcTriggerCfg = {
-  check: TriggerCheck;
-  scaleBy?: "fate";
-  baseChancePercent?: number;
-  fateScalePerPoint?: number;
-  maxChancePercent?: number;
-};
-
-type PassiveDefaultSkillCfg = {
-  enabled?: boolean;
-  name: string;
-  damageType?: "physical" | "magical";
-  shortDescEn?: string;
-  longDescEn?: string;
-  trigger: ProcTriggerCfg;
-  durationTurns?: number;
-  bonusDamage?: number;
-  extraEffects?: Record<string, number>;
-};
-
-type UltimateSkillCfg = {
-  enabled?: boolean;
-  name: string;
-  description?: string;
-  cooldownTurns: number;
-  effects?: {
-    bonusDamagePercent?: number;
-    applyDebuff?: string;
-    debuffValue?: number;
-    bleedDamagePerTurn?: number;
-    debuffDurationTurns?: number;
-  };
-  proc?: {
-    enabled?: boolean;
-    respectCooldown?: boolean;
-    trigger?: ProcTriggerCfg;
-  };
-};
-
-function readClassSkills(raw: any): {
-  passive?: PassiveDefaultSkillCfg;
-  ultimate?: UltimateSkillCfg;
-  primaryWeapons?: string[];
-} {
-  const cls = raw?.class ?? {};
-  const passive = cls?.passiveDefaultSkill as PassiveDefaultSkillCfg | undefined;
-  const ultimate = cls?.ultimateSkill as UltimateSkillCfg | undefined;
-  const primaryWeapons = Array.isArray(cls?.primaryWeapons) ? cls.primaryWeapons : undefined;
-  return { passive, ultimate, primaryWeapons };
-}
-
-function procChanceFromFate(trigger: ProcTriggerCfg | undefined, fate: number, fallback: { base: number; scale: number; cap: number }) {
-  if (!trigger) return clamp01((fallback.base + fate * fallback.scale) / 100);
-  const base = i(trigger.baseChancePercent, fallback.base);
-  const scale = i(trigger.fateScalePerPoint, fallback.scale);
-  const cap = i(trigger.maxChancePercent, fallback.cap);
-  const pct = Math.min(cap, base + fate * scale);
-  return clamp01(pct / 100);
-}
-
 /* ───────── armas y shape ───────── */
 function extractWeapons(raw: any): { main: WeaponData; off?: WeaponData | null } {
   const mainRaw = raw?.weapon ?? raw?.equipment?.weapon ?? raw?.equipment?.mainHand ?? raw?.equipment?.mainWeapon ?? null;
   const offRaw = raw?.offHand ?? raw?.offhand ?? raw?.equipment?.offHand ?? raw?.equipment?.offhand ?? raw?.equipment?.shield ?? null;
 
-  // ⚠️ Cambio clave: NO usamos fallback de defaultWeapon/clase.
-  // Si no hay arma equipada → fists (se resuelve dentro de ensureWeaponOrDefault).
-  const main = ensureWeaponOrDefault(mainRaw /*, raw?.class?.defaultWeapon ?? raw?.className */);
-
+  // Fallback a puños si no hay arma (lo maneja ensureWeaponOrDefault)
+  const main = ensureWeaponOrDefault(mainRaw);
   const off = offRaw ? normalizeWeaponData(offRaw) : null;
   return { main, off };
 }
 
-/* ───────── normalización a Manager ───────── */
+/* ───────── normalización a CombatManager.CombatSide ───────── */
 function toCMEntity(raw: any, rng: () => number) {
   const csRaw = raw?.combat ?? raw?.combatStats ?? {};
 
@@ -153,7 +87,7 @@ function toCMEntity(raw: any, rng: () => number) {
     damageReduction: clamp01(pctToFrac(csRaw.damageReduction)),
     criticalChance: clamp01(pctToFrac(csRaw.criticalChance)),
     criticalDamageBonus: Math.max(0, pctToFrac(csRaw.criticalDamageBonus ?? 0.5)),
-    attackSpeed: Math.max(0.1, toNum(csRaw.attackSpeed, 1)),
+    attackSpeed: Math.max(1, Math.round(toNum(csRaw.attackSpeed, 6))), // enteros (AS táctico)
     maxHP: toNum(csRaw.maxHP ?? raw?.maxHP, 100),
   };
 
@@ -162,17 +96,22 @@ function toCMEntity(raw: any, rng: () => number) {
 
   const { main, off } = extractWeapons(raw);
 
-  // bonus defensivo si el offhand es escudo (pequeño, no rompe)
+  // bonus defensivo si el offhand es escudo
   if (off?.category === "shield") {
     combatNorm.blockChance = clamp01(combatNorm.blockChance + 0.05);
     combatNorm.damageReduction = clamp01(combatNorm.damageReduction + 0.03);
   }
 
-  const { primaryWeapons } = readClassSkills(raw);
+  // skills/clase → necesarios para que el CombatManager procee pasivas/ultimate
+  const cls = raw?.class ?? {};
+  const passiveDefaultSkill = cls?.passiveDefaultSkill ?? undefined;
+  const ultimateSkill = cls?.ultimateSkill ?? undefined;
+  const primaryWeapons: string[] | undefined = Array.isArray(cls?.primaryWeapons) ? cls.primaryWeapons : undefined;
 
   return {
     name: raw?.name ?? raw?.username ?? "—",
     className: raw?.className ?? raw?.class?.name ?? undefined,
+    baseStats: raw?.baseStats ?? raw?.stats ?? {}, // Fate aquí
     stats: raw?.stats ?? {},
     resistances: raw?.resistances ?? {},
     equipment: raw?.equipment ?? {},
@@ -183,57 +122,17 @@ function toCMEntity(raw: any, rng: () => number) {
     weaponMain: main,
     weaponOff: off ?? null,
     classMeta: { primaryWeapons: primaryWeapons ?? raw?.class?.primaryWeapons ?? undefined },
+    passiveDefaultSkill,
+    ultimateSkill,
   };
 }
 
-/* ───────── estado runtime para procs ───────── */
-type RuntimeState = {
-  passiveBuff?: {
-    name?: string;
-    remainingTurns: number;
-    bonusDamage: number;
-    extraEffects?: Record<string, number>;
-  } | null;
-  ultimate?: {
-    name?: string;
-    cdLeft: number;
-  } | null;
-  status?: {
-    pending?: Array<{ key: string; duration: number; value?: number }>;
-  };
-};
-
-function initRuntimeState(raw: any) {
-  const state: RuntimeState = {
-    passiveBuff: null,
-    ultimate: null,
-    status: { pending: [] },
-  };
-  const { ultimate } = readClassSkills(raw);
-  if (ultimate?.enabled) {
-    state.ultimate = { name: ultimate.name, cdLeft: 0 };
-  }
-  return state;
-}
-
-/* ───────── Runner PvP ───────── */
+/* ───────── Runner PvP fino: delega todo al CombatManager ───────── */
 export function runPvp({ attackerSnapshot, defenderSnapshot, seed, maxRounds = 30 }: { attackerSnapshot: any; defenderSnapshot: any; seed: number; maxRounds?: number }): PvpFightResult {
   const rng = mulberry32(seed || 1);
 
   const attacker = toCMEntity(attackerSnapshot, rng);
   const defender = toCMEntity(defenderSnapshot, rng);
-
-  const Astate = initRuntimeState(attackerSnapshot);
-  const Dstate = initRuntimeState(defenderSnapshot);
-
-  const { passive: Apassive, ultimate: Ault } = readClassSkills(attackerSnapshot);
-  const { passive: Dpassive, ultimate: Dult } = readClassSkills(defenderSnapshot);
-
-  // Class packs (solo tags para VFX/logs)
-  const AclassPack = buildClassPassivePack(attacker.className);
-  const DclassPack = buildClassPassivePack(defender.className);
-  const AclassState: any = {};
-  const DclassState: any = {};
 
   if (DEBUG_PVP) {
     console.log("[PVP] A.combat =", attacker.combat, "A.weaponMain =", attacker.weaponMain, "A.weaponOff =", attacker.weaponOff);
@@ -247,238 +146,123 @@ export function runPvp({ attackerSnapshot, defenderSnapshot, seed, maxRounds = 3
   const snapshots: PvpFightResult["snapshots"] = [];
 
   for (let turn = 1; turn <= maxRounds; turn++) {
-    const roundTags: string[] = [];
-    const pushRoundTag = (ev: string) => roundTags.push(ev);
-
     cm.startRound(turn, () => {});
     const isAtkTurn = turn % 2 === 1;
-    const actorSide: "player" | "enemy" = isAtkTurn ? "player" : "enemy";
-    const actorSnap = isAtkTurn ? attackerSnapshot : defenderSnapshot;
-    const actorState = isAtkTurn ? Astate : Dstate;
-    const actorUltimateCfg = isAtkTurn ? Ault : Dult;
 
-    // Class pack onRoundStart (tags solo)
-    if (isAtkTurn) {
-      AclassPack.hooks?.onRoundStart?.({ state: AclassState, side: "player", pushEvent: pushRoundTag } as any);
-    } else {
-      DclassPack.hooks?.onRoundStart?.({ state: DclassState, side: "enemy", pushEvent: pushRoundTag } as any);
-    }
-
-    // ── 1) Ultimate al inicio del turno
-    let ultMult = 1;
-    let ultCast = false;
-    let ultTags: string[] = [];
-    if (actorUltimateCfg?.enabled && actorUltimateCfg.proc?.enabled) {
-      const ready = !actorState.ultimate || actorState.ultimate.cdLeft <= 0 ? true : actorState.ultimate.cdLeft <= 0;
-      const respects = actorUltimateCfg.proc.respectCooldown !== false;
-      const canTry = respects ? ready : true;
-
-      if (canTry && actorUltimateCfg.proc.trigger?.check === "onTurnStart") {
-        const fate = toNum(actorSnap?.stats?.fate, 0);
-        const chance = procChanceFromFate(actorUltimateCfg.proc.trigger, fate, { base: 1, scale: 1, cap: 8 });
-        if (rng() < chance) {
-          ultCast = true;
-          const bonusPct = toNum(actorUltimateCfg.effects?.bonusDamagePercent, 0);
-          ultMult = Math.max(1, 1 + bonusPct / 100);
-
-          const cd = Math.max(0, Math.floor(toNum(actorUltimateCfg.cooldownTurns, 6)));
-          if (actorState.ultimate) actorState.ultimate.cdLeft = cd;
-
-          if (actorUltimateCfg.effects?.applyDebuff) {
-            const dur = Math.max(1, Math.floor(toNum(actorUltimateCfg.effects.debuffDurationTurns, 1)));
-            (isAtkTurn ? Dstate : Astate).status?.pending?.push({
-              key: String(actorUltimateCfg.effects.applyDebuff),
-              duration: dur,
-              value: toNum(actorUltimateCfg.effects.debuffValue ?? actorUltimateCfg.effects.bleedDamagePerTurn, 0),
-            });
-            ultTags.push(`${actorSide}:apply:${actorUltimateCfg.effects.applyDebuff}`);
-          }
-
-          timeline.push({
-            turn,
-            actor: isAtkTurn ? "attacker" : "defender",
-            damage: 0,
-            attackerHP: clampInt((cm as any).player?.currentHP, 0, attacker.maxHP),
-            defenderHP: clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP),
-            event: "ultimate_cast",
-            ability: { kind: "ultimate", name: actorUltimateCfg.name, durationTurns: undefined },
-            tags: ultTags.slice(),
-          });
-
-          log.push(`▶️ ${isAtkTurn ? "Atacante" : "Defensor"} **lanza Ultimate**: ${actorUltimateCfg.name}`);
-        }
-      }
-    }
-
-    // tick cooldowns
-    if (Astate.ultimate?.cdLeft && isAtkTurn === false) Astate.ultimate.cdLeft = Math.max(0, Astate.ultimate.cdLeft - 1);
-    if (Dstate.ultimate?.cdLeft && isAtkTurn === true) Dstate.ultimate.cdLeft = Math.max(0, Dstate.ultimate.cdLeft - 1);
-
-    // ── 2) Ataque base
+    // Ejecuta el turno con burst (el manager ya emite eventos y aplica estados)
     const out = isAtkTurn ? cm.playerAttack() : cm.enemyAttack();
 
-    // ── 3) Pasiva (on hit)
-    let passiveProc = false;
-    let passiveThisHitBonus = 0;
-    let passiveName: string | undefined;
+    // Construimos entries a partir de los eventos del manager + el agregado del golpe
+    const actorSide: "player" | "enemy" = isAtkTurn ? "player" : "enemy";
+    const actorRole: "attacker" | "defender" = isAtkTurn ? "attacker" : "defender";
+    const atkEntity = isAtkTurn ? attacker : defender;
 
-    const passiveCfg = (isAtkTurn ? Apassive : Dpassive) as PassiveDefaultSkillCfg | undefined;
-    const actorPassiveState = isAtkTurn ? Astate : Dstate;
+    // tags comunes de arma
+    const baseTags: string[] = [];
+    if (atkEntity?.weaponMain?.slug) baseTags.push(`${actorSide}:weapon:${atkEntity.weaponMain.slug}`);
+    // si el offhand contribuye a daño (weapon/focus), lo taggeamos (sin depender de offhandUsed)
+    if (atkEntity?.weaponOff?.slug && (atkEntity.weaponOff.category === "weapon" || atkEntity.weaponOff.category === "focus")) {
+      baseTags.push(`${actorSide}:weapon_off:${atkEntity.weaponOff.slug}`);
+    }
 
-    if (passiveCfg?.enabled && !out.flags.miss) {
-      const fate = toNum(actorSnap?.stats?.fate, 0);
-      const chance = procChanceFromFate(passiveCfg.trigger, fate, { base: 6, scale: 1, cap: 35 });
-      if (rng() < chance) {
-        passiveProc = true;
-        passiveName = passiveCfg.name;
+    // 1) eventos estructurados que trae el manager (dot_tick, ultimate_cast, passive_proc, hits…)
+    for (const ev of out.events ?? []) {
+      // map actor del manager ("player"/"enemy") al rol local en este turno ("attacker"/"defender")
+      const evActorIsPlayer = ev.actor === "player";
+      const evActorRole: "attacker" | "defender" = (isAtkTurn && evActorIsPlayer) || (!isAtkTurn && !evActorIsPlayer) ? "attacker" : "defender";
 
-        const dur = Math.max(1, Math.floor(toNum(passiveCfg.durationTurns, 2)));
-        const flat = i0(passiveCfg.bonusDamage);
-        passiveThisHitBonus += flat;
-
-        actorPassiveState.passiveBuff = {
-          name: passiveCfg.name,
-          remainingTurns: dur,
-          bonusDamage: flat,
-          extraEffects: { ...(passiveCfg.extraEffects || {}) },
-        };
-
+      if (ev.type === "dot_tick") {
+        const entryTags = [...baseTags, `${evActorRole}:dot:${ev.key}`];
         timeline.push({
           turn,
-          actor: isAtkTurn ? "attacker" : "defender",
+          actor: evActorRole,
+          damage: ev.damage,
+          attackerHP: clampInt((cm as any).player?.currentHP, 0, attacker.maxHP),
+          defenderHP: clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP),
+          event: "dot_tick",
+          tags: entryTags,
+        });
+        log.push(`• DoT (${ev.key}) hace ${ev.damage} de daño.`);
+        continue;
+      }
+
+      if (ev.type === "ultimate_cast") {
+        timeline.push({
+          turn,
+          actor: evActorRole,
+          damage: 0,
+          attackerHP: clampInt((cm as any).player?.currentHP, 0, attacker.maxHP),
+          defenderHP: clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP),
+          event: "ultimate_cast",
+          ability: { kind: "ultimate", name: ev.name },
+          tags: [...baseTags, `${evActorRole}:ultimate:${ev.name}`],
+        });
+        log.push(`▶️ ${evActorRole === "attacker" ? "Atacante" : "Defensor"} lanza Ultimate: ${ev.name}`);
+        continue;
+      }
+
+      if (ev.type === "passive_proc") {
+        timeline.push({
+          turn,
+          actor: evActorRole,
           damage: 0,
           attackerHP: clampInt((cm as any).player?.currentHP, 0, attacker.maxHP),
           defenderHP: clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP),
           event: "passive_proc",
-          ability: { kind: "passive", name: passiveCfg.name, durationTurns: dur },
-          tags: [`${actorSide}:passive:${passiveCfg.name}`],
+          ability: { kind: "passive", name: ev.name, durationTurns: ev.duration },
+          tags: [...baseTags, `${evActorRole}:passive:${ev.name}`, `${evActorRole}:passive:${ev.result}`],
         });
+        log.push(`✨ ${evActorRole === "attacker" ? "Atacante" : "Defensor"} pasiva ${ev.name} (${ev.result})`);
+        continue;
+      }
 
-        log.push(`✨ ${isAtkTurn ? "Atacante" : "Defensor"} **activa Pasiva**: ${passiveCfg.name} (+${flat} daño por ${dur} turnos)`);
+      // CRIT/BLOCK/MISS/HIT activos
+      if (ev.type === "crit" || ev.type === "block" || ev.type === "miss") {
+        // Estos eventos ya fueron reflejados en el propio "hit" posterior; los usamos como tags auxiliares
+        const tag = ev.type === "crit" ? `${evActorRole}:crit` : ev.type === "block" ? `${evActorRole}:blocked` : `${evActorRole}:miss`;
+        baseTags.push(tag);
+        continue;
+      }
+
+      if (ev.type === "hit") {
+        const entryTags = [...baseTags, `${evActorRole}:attack`, `${evActorRole}:vfx:${ev.vfx}`];
+        const entry = {
+          turn,
+          actor: evActorRole,
+          damage: ev.damage.final,
+          attackerHP: clampInt((cm as any).player?.currentHP, 0, attacker.maxHP),
+          defenderHP: clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP),
+          event: flagsToEvent({
+            // derivamos el tipo a partir del breakdown que ya registró el manager (tags previos)
+            // no tenemos miss/block/crit en este objeto, pero ya empujamos tags antes; el "hit" queda como tal
+          }),
+          tags: entryTags,
+        } as TimelineEntry;
+
+        // Si tenés interés, podés inyectar breakdown en tags debug:
+        // entry.tags?.push(`d:df=${ev.damage.breakdown.defenseFactor}`, `d:elm=${ev.damage.breakdown.elementFactor}`);
+
+        // En la UI solemos distinguir por tags; el event base lo dejamos "hit".
+        entry.event = "hit";
+        timeline.push(entry);
+
+        const who = evActorRole === "attacker" ? attackerSnapshot?.name ?? "Atacante" : defenderSnapshot?.name ?? "Defensor";
+        const tgt = evActorRole === "attacker" ? defenderSnapshot?.name ?? "Defensor" : attackerSnapshot?.name ?? "Atacante";
+        log.push(`${who} golpea a ${tgt} por ${ev.damage.final}.`);
+        continue;
       }
     }
 
-    // ── 4) Bonus pasivo persistente + multiplicador de Ultimate
-    const persistentFlat = i0((isAtkTurn ? Astate : Dstate).passiveBuff?.bonusDamage);
-    const baseDamage = i0(out.damage);
-    let finalDamage = baseDamage + passiveThisHitBonus + persistentFlat;
-    finalDamage = Math.floor(finalDamage * ultMult);
-
-    // Ajustar HP manualmente por el extra
-    const extraDelta = Math.max(0, finalDamage - baseDamage);
-    if (extraDelta > 0) {
-      if (isAtkTurn) (cm as any).enemy.currentHP = Math.max(0, (cm as any).enemy.currentHP - extraDelta);
-      else (cm as any).player.currentHP = Math.max(0, (cm as any).player.currentHP - extraDelta);
-    }
-
-    // ── 4.1) Class pack tags (no tocan números)
-    const hookTags: string[] = [];
-    const pushHookTag = (ev: string) => hookTags.push(ev);
-    if (isAtkTurn) {
-      AclassPack.hooks?.onModifyOutgoing?.({
-        dmg: finalDamage,
-        side: "player",
-        state: AclassState,
-        pushEvent: pushHookTag,
-        self: { className: attacker.className },
-        flags: out.flags,
-      } as any);
-      DclassPack.hooks?.onModifyIncoming?.({
-        dmg: finalDamage,
-        side: "enemy",
-        state: DclassState,
-        pushEvent: pushHookTag,
-        self: { className: defender.className },
-        flags: out.flags,
-      } as any);
-    } else {
-      DclassPack.hooks?.onModifyOutgoing?.({
-        dmg: finalDamage,
-        side: "enemy",
-        state: DclassState,
-        pushEvent: pushHookTag,
-        self: { className: defender.className },
-        flags: out.flags,
-      } as any);
-      AclassPack.hooks?.onModifyIncoming?.({
-        dmg: finalDamage,
-        side: "player",
-        state: AclassState,
-        pushEvent: pushHookTag,
-        self: { className: attacker.className },
-        flags: out.flags,
-      } as any);
-    }
-
-    // ── 5) Timeline entry del golpe
-    const entryTags: string[] = [];
-    const atkEntity = isAtkTurn ? attacker : defender;
-    if (atkEntity?.weaponMain?.slug) entryTags.push(`${actorSide}:weapon:${atkEntity.weaponMain.slug}`);
-    if (out.extra?.offhandUsed && atkEntity?.weaponOff?.slug) entryTags.push(`${actorSide}:weapon_off:${atkEntity.weaponOff.slug}`);
-    if (out.flags?.crit) entryTags.push(`${actorSide}:crit`);
-    if (out.flags?.miss) entryTags.push(`${actorSide}:miss`);
-    if (out.flags?.blocked) entryTags.push(`${actorSide}:blocked`);
-    entryTags.push(`${actorSide}:attack`);
-    entryTags.push(`${actorSide}:hit:${out.flags?.miss ? "miss" : out.flags?.blocked ? "blocked" : "physical"}`);
-    if (ultCast) entryTags.push(`${actorSide}:ultimate`);
-    if (passiveProc && passiveName) entryTags.push(`${actorSide}:passive:${passiveName}`);
-    if (hookTags.length) entryTags.push(...hookTags);
-    if (roundTags.length) entryTags.push(...roundTags);
-    if (ultTags.length) entryTags.push(...ultTags);
-
-    const entry: TimelineEntry = {
-      turn,
-      actor: isAtkTurn ? "attacker" : "defender",
-      damage: finalDamage,
-      attackerHP: clampInt((cm as any).player?.currentHP, 0, attacker.maxHP),
-      defenderHP: clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP),
-      event: flagsToEvent(out.flags),
-      tags: entryTags.length ? entryTags : undefined,
-    };
-    timeline.push(entry);
-
-    // ── 6) Log humano
-    const atkName = isAtkTurn ? attackerSnapshot?.name ?? "Atacante" : defenderSnapshot?.name ?? "Defensor";
-    const tgtName = isAtkTurn ? defenderSnapshot?.name ?? "Defensor" : attackerSnapshot?.name ?? "Atacante";
-
-    const hpA = entry.attackerHP,
-      mhpA = attacker.maxHP;
-    const hpD = entry.defenderHP,
-      mhpD = defender.maxHP;
-
-    const baseLine = out.flags?.miss
-      ? `${atkName} falla contra ${tgtName}.`
-      : out.flags?.blocked
-      ? `${tgtName} bloquea. Daño ${finalDamage}.`
-      : out.flags?.crit
-      ? `¡Crítico! ${atkName} golpea a ${tgtName} por ${finalDamage}.`
-      : `${atkName} golpea a ${tgtName} por ${finalDamage}.`;
-
-    const extras: string[] = [];
-    if (ultCast && (Ault?.name || Dult?.name)) extras.push(`Ultimate: ${isAtkTurn ? Ault?.name : Dult?.name}`);
-    if (passiveProc && passiveName) extras.push(`Pasiva: ${passiveName}`);
-    const tail = extras.length ? ` [${extras.join(" | ")}]` : "";
-
-    log.push(isAtkTurn ? `${baseLine} (${hpD}/${mhpD} HP)${tail}` : `${baseLine} (${hpA}/${mhpA} HP)${tail}`);
-
-    // ── 7) Snapshot por golpe
+    // Snapshot por fin de turno (agregamos daño total del burst)
     snapshots.push({
       round: turn,
       actor: actorSide,
-      damage: finalDamage,
-      playerHP: entry.attackerHP,
-      enemyHP: entry.defenderHP,
-      events: entryTags.slice(),
-      status: { pending: (isAtkTurn ? Dstate : Astate).status?.pending ?? [] },
+      damage: Math.max(0, toNum(out.damage, 0)),
+      playerHP: clampInt((cm as any).player?.currentHP, 0, attacker.maxHP),
+      enemyHP: clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP),
+      events: (out.events ?? []).map((e) => e.type),
+      status: {},
     });
-
-    // ── 8) Tick pasiva
-    for (const st of [Astate, Dstate]) {
-      if (st.passiveBuff && st.passiveBuff.remainingTurns > 0) {
-        st.passiveBuff.remainingTurns -= 1;
-        if (st.passiveBuff.remainingTurns <= 0) st.passiveBuff = null;
-      }
-    }
 
     if (cm.isCombatOver()) break;
   }
@@ -495,7 +279,7 @@ export function runPvp({ attackerSnapshot, defenderSnapshot, seed, maxRounds = 3
   }
   const outcome: "win" | "lose" | "draw" = !w ? "draw" : w === "player" ? "win" : "lose";
 
-  // ✅ turns = cantidad de IMPACTOS
+  // ✅ turns = cantidad de IMPACTOS (hit/crit/block/miss), no cuenta dot_tick ni passive/ultimate_cast
   const turns = timeline.reduce((acc, e) => acc + (isImpactEvent(e.event) ? 1 : 0), 0);
 
   return { outcome, turns, timeline, log, snapshots };
@@ -537,7 +321,7 @@ export function runPvpForMatch(attackerSnapshot: any, defenderSnapshot: any, see
     attackerHP: e.attackerHP,
     defenderHP: e.defenderHP,
     ability: e.ability ? { ...e.ability } : undefined,
-    tags: e.tags && e.tags.length ? e.tags.slice(0, 8) : undefined,
+    tags: e.tags && e.tags.length ? e.tags.slice(0, 12) : undefined,
   }));
 
   return { outcome: mappedOutcome, timeline: mappedTimeline };

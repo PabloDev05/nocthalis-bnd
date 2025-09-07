@@ -1,12 +1,8 @@
-// src/battleSystem/passives/DefaultPassives.ts
-
 /**
- * Tabla de "pasivas por defecto" por CLASE.
- * Son NUMÉRICAS y simples (no procs, no duración). Útiles para aplicar
- * modificadores planos a stats/combat ANTES del snapshot (fuera del motor).
- *
- * 👉 El motor de combate (pvpRunner/CombatManager) NO usa esto directamente.
- *    Sirve como fuente de verdad opcional para builders/cálculo previo.
+ * Tabla de "pasivas por defecto" por CLASE (NUMÉRICAS y simples).
+ * Útiles si querés aplicar modificadores planos a stats/combat ANTES del snapshot
+ * (por ejemplo en el builder del personaje). El motor de combate NO las usa
+ * directamente; son opcionales para tu pipeline.
  */
 
 export type PassiveNumbers = {

@@ -483,14 +483,41 @@ export function buildSeedEnemies(): SeedEnemy[] {
     all.push(buildEnemy(rnd, lvl, tier, arche, "boss"));
   }
 
+  // Ajuste de longitud exacta
   if (all.length !== 50) {
-    if (all.length > 50) return all.slice(0, 50);
-    const rnd = mulberry32(123);
-    while (all.length < 50) {
-      all.push(buildEnemy(rnd, 1, "common", "melee", null));
+    if (all.length > 50) all.splice(50);
+    else {
+      const rnd = mulberry32(123);
+      while (all.length < 50) all.push(buildEnemy(rnd, 1, "common", "melee", null));
     }
   }
+
+  // 🔒 Garantizar unicidad por (name, level, tier, bossType) para no chocar con el índice
+  ensureUniqueNames(all);
+
   return all;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Guardarraíl de unicidad de nombre por clave compuesta
+function ensureUniqueNames(list: SeedEnemy[]) {
+  const makeKey = (e: SeedEnemy) => `${e.name}|${e.level}|${e.tier}|${e.bossType ?? "null"}`;
+  const seen = new Set<string>();
+
+  for (const e of list) {
+    const baseName = e.name;
+    let suffixIndex = 1;
+    let key = makeKey(e);
+
+    while (seen.has(key)) {
+      suffixIndex += 1;
+      // Numeración romana para mantener flavor temático
+      const roman = ["", " II", " III", " IV", " V", " VI", " VII", " VIII", " IX", " X"][suffixIndex - 1] ?? ` ${suffixIndex}`;
+      e.name = baseName + roman;
+      key = makeKey(e);
+    }
+    seen.add(key);
+  }
 }
 
 // Ejecución directa para debug

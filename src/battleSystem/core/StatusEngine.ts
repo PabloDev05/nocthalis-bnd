@@ -1,24 +1,50 @@
 // src/battleSystem/core/StatusEngine.ts
 /**
  * Lleva el estado activo de buffs/debuffs en cada bando.
- * HOY: solo gestiona stacks/duración y emite eventos.
- * MAÑANA: podés hacer que afecte daño, turnos, etc. (ver hooks del runner).
+ * - Mantiene stacks, duración y magnitudes (value/dotDamage).
+ * - Integra resistencias del OBJETIVO para:
+ *   (a) bajar la chance de aplicación
+ *   (b) atenuar magnitud (value) de algunos estados
+ *   (c) reducir el daño por tick de DoT (bleed/poison/burn)
+ * - Los DoT tiquean en "turnStart" (PvP táctico).
+ *
+ * 👉 Ahora el tick emite un ENTRANTE estructurado para que el CombatManager
+ *    lo transforme en un evento `dot_tick` (distinto del `hit` normal).
  */
 
+import { STATUS_CATALOG, getStatusDef } from "../constants/status";
 import type { StatusKey } from "../constants/status";
 
 const DBG = process.env.DEBUG_COMBAT === "1";
 export type Side = "player" | "enemy";
 
+/** Defaults para magnitudes si no se especifican al aplicar. */
+const DEFAULTS = {
+  bleedPerStack: 6,
+  poisonPerStack: 5,
+  burnPerStack: 5,
+
+  weakenPct: 10,
+  cursePct: 10,
+  ragePct: 10,
+  fortifyPct: 5,
+  shieldPct: 8,
+
+  fearPP: 10,
+  hasteFlat: 2,
+  shockFlat: -2,
+};
+
 export interface StatusInstance {
   key: StatusKey;
   stacks: number;
-  turnsLeft: number; // en rondas
+  turnsLeft: number; // rondas
   source?: Side;
+  value?: number; // magnitud por stack (fear/curse/etc.)
+  dotDamage?: number; // dps por stack (DoT)
 }
 
 type StateMap = Map<StatusKey, StatusInstance>;
-
 const SIDES: Side[] = ["player", "enemy"];
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -32,63 +58,65 @@ export class StatusEngine {
 
   constructor(
     private rng: () => number,
-    /**
-     * Resistencia (0–100) del lado frente a un status. Si no pasás nada, asume 0.
-     */
+    /** Resistencia (0–100) del OBJETIVO frente a un status. */
     private getResistance: (side: Side, key: StatusKey) => number = () => 0,
-    /**
-     * Tope de stacks por status. Si no pasás nada, sin tope.
-     */
+    /** Tope de stacks por status. */
     private getMaxStacks: (key: StatusKey) => number | undefined = () => undefined
   ) {}
 
-  /** Limpia todo */
+  // ───────────────── Reset/Query ─────────────────
   public reset() {
     this.states.player.clear();
     this.states.enemy.clear();
   }
-
-  /** Elimina todos los estados de un lado específico */
   public clear(side: Side) {
     this.states[side].clear();
   }
 
-  /** Para snapshots/UI (no expone `source`) */
   public getPublicState() {
-    const toArr = (m: StateMap) => [...m.values()].map((s) => ({ key: s.key, stacks: s.stacks, turnsLeft: s.turnsLeft }));
+    const toArr = (m: StateMap) => [...m.values()].map((s) => ({ key: s.key, stacks: s.stacks, turnsLeft: s.turnsLeft, value: s.value }));
     return { player: toArr(this.states.player), enemy: toArr(this.states.enemy) };
   }
-
-  /** Estado interno completo (incluye `source`). Útil para debug. */
   public getInternalState() {
     const toArr = (m: StateMap) => [...m.values()].map((s) => ({ ...s }));
     return { player: toArr(this.states.player), enemy: toArr(this.states.enemy) };
   }
-
-  /** Serializa para guardar entre turnos si quisieras persistirlo */
   public serialize(): { player: StatusInstance[]; enemy: StatusInstance[] } {
     const toArr = (m: StateMap) => [...m.values()].map((s) => ({ ...s }));
     return { player: toArr(this.states.player), enemy: toArr(this.states.enemy) };
   }
-
-  /** Restaura desde `serialize()` (no valida claves) */
   public hydrate(payload: { player?: StatusInstance[]; enemy?: StatusInstance[] } | null | undefined) {
     if (!payload) return;
     if (Array.isArray(payload.player)) {
       this.states.player.clear();
       for (const s of payload.player) {
-        this.states.player.set(s.key, { ...s, stacks: toInt(s.stacks, 1), turnsLeft: Math.max(0, toInt(s.turnsLeft, 0)) });
+        this.states.player.set(s.key, {
+          ...s,
+          stacks: Math.max(1, toInt(s.stacks, 1)),
+          turnsLeft: Math.max(0, toInt(s.turnsLeft, 0)),
+          value: typeof s.value === "number" ? s.value : undefined,
+          dotDamage: typeof s.dotDamage === "number" ? s.dotDamage : undefined,
+        });
       }
     }
     if (Array.isArray(payload.enemy)) {
       this.states.enemy.clear();
       for (const s of payload.enemy) {
-        this.states.enemy.set(s.key, { ...s, stacks: toInt(s.stacks, 1), turnsLeft: Math.max(0, toInt(s.turnsLeft, 0)) });
+        this.states.enemy.set(s.key, {
+          ...s,
+          stacks: Math.max(1, toInt(s.stacks, 1)),
+          turnsLeft: Math.max(0, toInt(s.turnsLeft, 0)),
+          value: typeof s.value === "number" ? s.value : undefined,
+          dotDamage: typeof s.dotDamage === "number" ? s.dotDamage : undefined,
+        });
       }
     }
   }
 
-  /** Llamar al inicio de cada ronda para decrementar y limpiar expirados. */
+  /**
+   * Llamar al INICIO de cada ronda para decrementar y limpiar expirados.
+   * (El tick de DoT debe hacerse ANTES desde el CombatManager).
+   */
   public onRoundStart(round: number, pushEvent: (e: string) => void) {
     for (const side of SIDES) {
       const map = this.states[side];
@@ -104,29 +132,26 @@ export class StatusEngine {
     if (DBG) console.log("[STATUS] onRoundStart", { round, public: this.getPublicState() });
   }
 
-  /**
-   * Intenta aplicar un estado.
-   * - `baseChance` 0–100. Se ajusta por resistencia: eff = base*(1 - res/100).
-   * - Si ya existe, **refresca** duración al máximo entre actual y nueva y suma stacks (respetando tope si hay).
-   * - Emite `<side>:apply:<key>` cuando aplica, `<side>:resist:<key>` si falla por suerte/resistencia.
-   */
+  // ───────────────── Aplicación ─────────────────
   public tryApply(opts: {
     to: Side;
     key: StatusKey;
     baseChance?: number; // 0–100
-    duration?: number; // en rondas (>=1)
+    duration?: number; // rondas
     stacks?: number; // default 1
+    value?: number; // magnitud por stack (fear/curse/etc.)
+    dotDamage?: number; // daño por turno por stack (DoT)
     source?: Side;
     pushEvent: (e: string) => void;
   }) {
     const { to, key } = opts;
     const baseChance = clamp(toInt(opts.baseChance ?? 100, 100), 0, 100);
-    const duration = Math.max(1, toInt(opts.duration ?? 2, 2));
+    const duration = Math.max(1, toInt(opts.duration ?? getStatusDef(key).baseDuration ?? 2, 2));
     const stacks = Math.max(1, toInt(opts.stacks ?? 1, 1));
     const source = opts.source;
     const pushEvent = opts.pushEvent;
 
-    const res = clamp(this.getResistance(to, key) || 0, 0, 100); // 0–100
+    const res = clamp(this.getResistance(to, key) || 0, 0, 100);
     const effChance = clamp(baseChance * (1 - res / 100), 0, 100);
     const roll = this.rng() * 100;
     const applied = roll < effChance;
@@ -137,25 +162,33 @@ export class StatusEngine {
       return { applied: false };
     }
 
+    // Atenuar magnitud de value por resistencia:
+    const incomingValue = typeof opts.value === "number" ? opts.value : undefined;
+    const scaledValue = typeof incomingValue === "number" ? Math.max(0, Math.floor(incomingValue * (1 - res / 100))) : undefined;
+
+    // dotDamage se ajusta en tickDots (no aquí).
     const map = this.states[to];
     const current = map.get(key);
     const cap = this.getMaxStacks(key);
+
     if (current) {
       const nextStacks = current.stacks + stacks;
       current.stacks = typeof cap === "number" ? clamp(nextStacks, 1, Math.max(1, cap)) : nextStacks;
       current.turnsLeft = Math.max(current.turnsLeft, duration);
       if (source) current.source = source;
+      if (typeof scaledValue === "number") current.value = Math.max(current.value ?? scaledValue, scaledValue);
+      if (typeof opts.dotDamage === "number") current.dotDamage = Math.max(current.dotDamage ?? opts.dotDamage, opts.dotDamage);
     } else {
       const initStacks = typeof cap === "number" ? clamp(stacks, 1, Math.max(1, cap)) : stacks;
-      map.set(key, { key, stacks: initStacks, turnsLeft: duration, source });
+      map.set(key, { key, stacks: initStacks, turnsLeft: duration, source, value: scaledValue, dotDamage: opts.dotDamage });
     }
 
     pushEvent(`${to}:apply:${key}`);
-    if (DBG) console.log("[STATUS] Aplica", { to, key, stacks, duration, res, effChance, roll, cap });
+    if (DBG) console.log("[STATUS] Aplica", { to, key, stacks, duration, res, effChance, roll, scaledValue, dot: opts.dotDamage, cap });
     return { applied: true };
   }
 
-  /** Helpers de consulta para futuro (p.ej. saltar turno si stun) */
+  // ───────────────── Helpers CRUD ─────────────────
   public has(side: Side, key: StatusKey) {
     return this.states[side].has(key);
   }
@@ -164,5 +197,87 @@ export class StatusEngine {
   }
   public remove(side: Side, key: StatusKey) {
     this.states[side].delete(key);
+  }
+  public wakeIfDamaged(side: Side) {
+    if (this.has(side, "sleep")) this.remove(side, "sleep");
+  }
+
+  // ───────────────── Ticks de DoT ─────────────────
+  /**
+   * Devuelve el daño total aplicado y llama `emit` por cada stackable DoT.
+   * El callback recibe un payload estructurado para que el manager emita `dot_tick`.
+   */
+  public tickDots(victim: Side, when: "turnStart" | "turnEnd", emit: (e: { actor: Side; victim: Side; key: "bleed" | "poison" | "burn"; dmg: number }) => void): number {
+    const map = this.states[victim];
+    if (!map.size) return 0;
+    let total = 0;
+
+    for (const [key, inst] of map.entries()) {
+      const def = STATUS_CATALOG[key];
+      if (!def?.tickOn || def.tickOn !== when) continue;
+      if (key !== "bleed" && key !== "poison" && key !== "burn") continue;
+
+      const res = clamp(this.getResistance(victim, key) || 0, 0, 100);
+      const resFactor = Math.max(0, 1 - res / 100);
+
+      const fallback = key === "bleed" ? DEFAULTS.bleedPerStack : key === "poison" ? DEFAULTS.poisonPerStack : DEFAULTS.burnPerStack;
+      const perStack = inst.dotDamage ?? fallback;
+      const raw = Math.max(0, toInt(perStack) * Math.max(1, inst.stacks));
+      const dmg = Math.floor(raw * resFactor);
+      if (dmg > 0) {
+        total += dmg;
+        const actor = inst.source ?? (victim === "player" ? "enemy" : "player");
+        emit({ actor, victim, key, dmg });
+      }
+    }
+    return total;
+  }
+
+  // ───────────────── Modificadores consultables ─────────────────
+  public attackSpeedFlat(side: Side): number {
+    const haste = this.states[side].get("haste");
+    const shock = this.states[side].get("shock");
+    const hasteVal = (haste?.value ?? DEFAULTS.hasteFlat) * (haste?.stacks ?? 0);
+    const shockVal = (shock?.value ?? DEFAULTS.shockFlat) * (shock?.stacks ?? 0);
+    return toInt(hasteVal + shockVal, 0);
+  }
+  public critChanceReductionFrac(side: Side): number {
+    const fear = this.states[side].get("fear");
+    if (!fear) return 0;
+    const per = (fear.value ?? DEFAULTS.fearPP) / 100;
+    return clamp(per * Math.max(1, fear.stacks), 0, 1);
+  }
+  public attackPowerMul(side: Side): number {
+    const curse = this.states[side].get("curse");
+    const rage = this.states[side].get("rage");
+    const curMul = curse ? Math.max(0, 1 - (curse.value ?? DEFAULTS.cursePct) / 100) ** Math.max(1, curse.stacks) : 1;
+    const ragMul = rage ? (1 + (rage.value ?? DEFAULTS.ragePct) / 100) ** Math.max(1, rage.stacks) : 1;
+    return Math.max(0, curMul * ragMul);
+  }
+  public extraDamageReduction(side: Side): number {
+    const fortify = this.states[side].get("fortify");
+    const shield = this.states[side].get("shield");
+    const f = fortify ? ((fortify.value ?? DEFAULTS.fortifyPct) / 100) * Math.max(1, fortify.stacks) : 0;
+    const s = shield ? ((shield.value ?? DEFAULTS.shieldPct) / 100) * Math.max(1, shield.stacks) : 0;
+    return clamp(f + s, 0, 1);
+  }
+  public physDefMul(side: Side): number {
+    const w = this.states[side].get("weaken");
+    if (!w) return 1;
+    const m = Math.max(0, 1 - (w.value ?? DEFAULTS.weakenPct) / 100);
+    return Math.max(0, m ** Math.max(1, w.stacks));
+  }
+
+  public cannotAct(side: Side): boolean {
+    return this.states[side].has("stun") || this.states[side].has("freeze");
+  }
+  public silenced(side: Side): boolean {
+    return this.states[side].has("silence");
+  }
+  public paralysisSkip(side: Side): boolean {
+    return this.states[side].has("paralysis") && this.rng() < 0.5;
+  }
+  public confusionMiss(side: Side): boolean {
+    return this.states[side].has("confusion") && this.rng() < 0.25;
   }
 }
