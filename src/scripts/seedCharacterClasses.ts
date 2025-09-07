@@ -1,3 +1,4 @@
+// src/scripts/seedCharacterClasses.ts
 export const seedCharacterClasses = [
   /* ───────────────────────────── Vampire ───────────────────────────── */
   {
@@ -12,13 +13,13 @@ export const seedCharacterClasses = [
     defaultWeapon: "Rapier",
     allowedWeapons: ["Rapier", "Dagger", "Shortsword", "Scimitar", "Kris", "Shadowfang Blade", "Crimson Scimitar", "Bloodfang Sabre", "Shadow Kris", "Nightfang Blade", "Curved Fangblade"],
 
-    // Passive: flat bonus damage + extra combat stat for 3 turns (Fate-based, repeatable)
+    // STR-leaning → physical passive
     passiveDefaultSkill: {
       enabled: true,
       name: "Crimson Impulse",
-      damageType: "magical",
-      shortDescEn: "+6 magic damage and +2 Evasion for 3 turns (scales with Fate).",
-      longDescEn: "On basic hits, may grant +6 magic damage and +2 Evasion for 3 turns. Chance = min(7% + Fate×1, 35%). No stacking; refresh duration if active.",
+      damageType: "physical",
+      shortDescEn: "+6 physical damage and +2 Evasion for 3 turns (scales with Fate).",
+      longDescEn: "On basic hits, may grant +6 physical damage and +2 Evasion for 3 turns. Chance = min(7% + Fate×1, 35%). No stacking; refresh duration if active.",
       trigger: {
         check: "onBasicHit",
         scaleBy: "fate",
@@ -63,7 +64,8 @@ export const seedCharacterClasses = [
     },
 
     combatStats: {
-      maxHP: 220,
+      // Small variation & trade-off: mid ATK → mid-low HP
+      maxHP: 218,
       attackPower: 24,
       magicPower: 8,
       criticalChance: 12,
@@ -136,12 +138,13 @@ export const seedCharacterClasses = [
     defaultWeapon: "Iron Claws",
     allowedWeapons: ["Iron Claws", "Dual Daggers", "Shortsword", "Light Axe", "Feral Fangblade", "Savage Paw", "Claw Gauntlets", "Beast Fangs", "Dire Talons", "Bloodclaw", "Rendfangs"],
 
+    // STR-leaning → physical passive
     passiveDefaultSkill: {
       enabled: true,
       name: "Lupine Frenzy",
-      damageType: "magical",
-      shortDescEn: "+7 magic damage and +2 Attack Speed for 3 turns (scales with Fate).",
-      longDescEn: "On basic hits, may grant +7 magic damage and +2 Attack Speed for 3 turns. Chance = min(6% + Fate×1, 32%). No stacking; refresh duration.",
+      damageType: "physical",
+      shortDescEn: "+7 physical damage and +2 Attack Speed for 3 turns (scales with Fate).",
+      longDescEn: "On basic hits, may grant +7 physical damage and +2 Attack Speed for 3 turns. Chance = min(6% + Fate×1, 32%). No stacking; refresh duration.",
       trigger: { check: "onBasicHit", scaleBy: "fate", baseChancePercent: 6, fateScalePerPoint: 1, maxChancePercent: 32 },
       durationTurns: 3,
       bonusDamage: 7,
@@ -180,7 +183,8 @@ export const seedCharacterClasses = [
     },
 
     combatStats: {
-      maxHP: 250,
+      // High ATK → slightly reduced HP vs tanks/casters
+      maxHP: 222,
       attackPower: 28,
       magicPower: 4,
       criticalChance: 10,
@@ -248,6 +252,7 @@ export const seedCharacterClasses = [
     defaultWeapon: "Bone Staff",
     allowedWeapons: ["Bone Staff", "Scepter", "Wand", "Occult Rod", "Grimoire", "Soul Orb", "Corrupted Scepter", "Skull Wand", "Plague Rod", "Soulbone Cane", "Ghoul Scepter", "Occult Crook"],
 
+    // INT-leaning → magical passive
     passiveDefaultSkill: {
       enabled: true,
       name: "Umbral Focus",
@@ -292,7 +297,8 @@ export const seedCharacterClasses = [
     },
 
     combatStats: {
-      maxHP: 220,
+      // High MAG → lowest HP
+      maxHP: 206,
       attackPower: 8,
       magicPower: 32,
       criticalChance: 8,
@@ -360,12 +366,13 @@ export const seedCharacterClasses = [
     defaultWeapon: "Cursed Crossbow",
     allowedWeapons: ["Cursed Crossbow", "Twin Flintlocks", "Shortbow", "Arquebus", "Hexed Rifle", "Twin Daggers", "Ancient Pistol", "Bone Carbine", "Spectral Arquebus", "Ghastly Handcannon"],
 
+    // DEX-leaning → physical passive
     passiveDefaultSkill: {
       enabled: true,
       name: "Spectral Deadeye",
-      damageType: "magical",
-      shortDescEn: "+5 magic damage and +2% Critical Chance for 3 turns (scales with Fate).",
-      longDescEn: "On ranged hits, may grant +5 magic damage and +2% Critical Chance for 3 turns. Chance = min(8% + Fate×1, 36%). No stacking; refresh duration.",
+      damageType: "physical",
+      shortDescEn: "+5 physical damage and +2% Critical Chance for 3 turns (scales with Fate).",
+      longDescEn: "On ranged hits, may grant +5 physical damage and +2% Critical Chance for 3 turns. Chance = min(8% + Fate×1, 36%). No stacking; refresh duration.",
       trigger: { check: "onRangedHit", scaleBy: "fate", baseChancePercent: 8, fateScalePerPoint: 1, maxChancePercent: 36 },
       durationTurns: 3,
       bonusDamage: 5,
@@ -404,7 +411,8 @@ export const seedCharacterClasses = [
     },
 
     combatStats: {
-      maxHP: 220,
+      // High DEX/crit → lower HP than melee/tank
+      maxHP: 214,
       attackPower: 24,
       magicPower: 10,
       criticalChance: 14,
@@ -472,6 +480,7 @@ export const seedCharacterClasses = [
     defaultWeapon: "Holy Mace",
     allowedWeapons: ["Holy Mace", "Flail", "Warhammer", "Morningstar", "Censer", "Cleric Staff", "Consecrated Flail", "Blessed Morningstar", "Iron Censer", "Divine Hammer", "Sanctified Club"],
 
+    // INT-leaning → magical passive
     passiveDefaultSkill: {
       enabled: true,
       name: "Hallowed Smite",
@@ -516,6 +525,7 @@ export const seedCharacterClasses = [
     },
 
     combatStats: {
+      // Caster-paladin feel → sturdier than other INT class
       maxHP: 230,
       attackPower: 16,
       magicPower: 26,
@@ -533,7 +543,7 @@ export const seedCharacterClasses = [
     ultimateSkill: {
       enabled: true,
       name: "Sacred Judgement",
-      description: "A heavy mace strike for +55% magic holy damage. Applies 'Silence' (target cannot use ultimate next turn).",
+      description: "A heavy mace strike for +55% magic damage. Applies 'Silence' (target cannot use ultimate next turn).",
       cooldownTurns: 7,
       effects: { bonusDamagePercent: 55, applyDebuff: "silence", debuffDurationTurns: 1 },
       proc: {
