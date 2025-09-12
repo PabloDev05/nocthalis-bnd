@@ -1,4 +1,3 @@
-// src/controllers/simulateCombat.controller.ts
 /* eslint-disable no-console */
 import type { RequestHandler } from "express";
 import { Types } from "mongoose";
@@ -7,6 +6,7 @@ import { Character } from "../../models/Character";
 import { runPvp } from "../../battleSystem";
 import { computeProgression } from "../../services/progression.service";
 import { spendStamina, getStaminaByUserId } from "../../services/stamina.service";
+import { weaponTemplateFor } from "../../battleSystem/core/Weapon"; // ← NUEVO
 
 /** Costo de stamina por pelea PvP (se cobra al resolver) */
 const STAMINA_COST_PVP = 10;
@@ -45,7 +45,11 @@ const POINTS_FIELDS = ["availablePoints", "statPoints", "unallocatedPoints", "po
 const ATTR_POINTS_PER_LEVEL = 5;
 
 /** Aplica recompensas + actualiza level si corresponde */
-async function applyRewardsToCharacter(charId: any | undefined, userId: any | undefined, rw: { xp?: number; gold?: number; honorDelta?: number }) {
+async function applyRewardsToCharacter(
+  charId: any | undefined,
+  userId: any | undefined,
+  rw: { xp?: number; gold?: number; honorDelta?: number }
+) {
   let doc = (charId && (await Character.findById(charId))) || (userId && (await Character.findOne({ userId })));
 
   if (!doc) return { updated: false };
@@ -176,6 +180,26 @@ function normalizeTimeline(items: TLIn[] | undefined | null) {
   });
 }
 
+/* ---------- Helper para adjuntar meta de UI (min/max + skills) ---------- */
+function sideUiFromSnapshot(snap: any) {
+  if (!snap) return undefined;
+  const w = weaponTemplateFor(snap?.weapon);
+  return {
+    name: snap?.name ?? "—",
+    className: snap?.class?.name ?? snap?.className ?? "—",
+    combatStats: {
+      ...(snap?.combat ?? {}),
+      minDamage: w.minDamage,
+      maxDamage: w.maxDamage,
+      damageMin: w.minDamage,
+      damageMax: w.maxDamage,
+    },
+    passiveDefaultSkill: snap?.class?.passiveDefaultSkill ?? null,
+    ultimateSkill: snap?.class?.ultimateSkill ?? null,
+    weaponSlug: snap?.weapon ?? null,
+  };
+}
+
 /* ---------------- GET /combat/simulate (preview público) ---------------- */
 export const simulateCombatPreviewController: RequestHandler = async (req, res) => {
   try {
@@ -197,6 +221,9 @@ export const simulateCombatPreviewController: RequestHandler = async (req, res) 
     console.log("[PVP][GET/preview] outcome:", outcome, "turns:", (timeline ?? []).length);
     console.log("[PVP][GET/preview] snapshots.len =", (snapshots ?? []).length);
 
+    const attacker = sideUiFromSnapshot((snapshots as any)?.[0] ?? (match as any).attackerSnapshot);
+    const defender = sideUiFromSnapshot((snapshots as any)?.[1] ?? (match as any).defenderSnapshot);
+
     return res.json({
       ok: true,
       outcome,
@@ -205,6 +232,8 @@ export const simulateCombatPreviewController: RequestHandler = async (req, res) 
       log,
       snapshots,
       runnerVersion: RUNNER_VERSION,
+      attacker, // ← NUEVO
+      defender, // ← NUEVO
     });
   } catch (err) {
     console.error("GET /combat/simulate (preview) error:", err);
@@ -234,6 +263,9 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
     console.log("[PVP][POST/sim] outcome:", outcome, "turns:", (timeline ?? []).length);
     console.log("[PVP][POST/sim] snapshots.len =", (snapshots ?? []).length);
 
+    const attacker = sideUiFromSnapshot((snapshots as any)?.[0] ?? (match as any).attackerSnapshot);
+    const defender = sideUiFromSnapshot((snapshots as any)?.[1] ?? (match as any).defenderSnapshot);
+
     return res.json({
       ok: true,
       outcome,
@@ -242,6 +274,8 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
       log,
       snapshots,
       runnerVersion: RUNNER_VERSION,
+      attacker, // ← NUEVO
+      defender, // ← NUEVO
     });
   } catch (err) {
     console.error("POST /combat/simulate error:", err);
@@ -269,7 +303,13 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
     // Ya resuelto → devolvemos lo persistido
     if (mAny.status === "resolved") {
       const storedOutcome = (mAny.outcome ?? "draw") as "attacker" | "defender" | "draw";
-      const outcomeForAttacker: "win" | "lose" | "draw" = storedOutcome === "attacker" ? "win" : storedOutcome === "defender" ? "lose" : "draw";
+      const outcomeForAttacker: "win" | "lose" | "draw" =
+        storedOutcome === "attacker" ? "win" : storedOutcome === "defender" ? "lose" : "draw";
+
+      const attackerStored = (Array.isArray(mAny.snapshots) && mAny.snapshots[0]) || mAny.attackerSnapshot;
+      const defenderStored = (Array.isArray(mAny.snapshots) && mAny.snapshots[1]) || mAny.defenderSnapshot;
+      const attacker = sideUiFromSnapshot(attackerStored);
+      const defender = sideUiFromSnapshot(defenderStored);
 
       return res.json({
         ok: true,
@@ -281,6 +321,8 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
         turns: Number(mAny.turns ?? mAny.timeline?.length ?? 0),
         alreadyResolved: true,
         runnerVersion: Number(mAny.runnerVersion ?? RUNNER_VERSION),
+        attacker, // ← NUEVO
+        defender, // ← NUEVO
       });
     }
 
@@ -313,7 +355,10 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
 
     const att = mAny.attackerSnapshot || {};
     const def = mAny.defenderSnapshot || {};
-    await Promise.all([applyRewardsToCharacter(att.characterId, att.userId, rw.attacker), applyRewardsToCharacter(def.characterId, def.userId, rw.defender)]);
+    await Promise.all([
+      applyRewardsToCharacter(att.characterId, att.userId, rw.attacker),
+      applyRewardsToCharacter(def.characterId, def.userId, rw.defender),
+    ]);
 
     mAny.status = "resolved";
     mAny.outcome = mapOutcomeForMatch(outcome);
@@ -331,6 +376,9 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
 
     await match.save();
 
+    const attacker = sideUiFromSnapshot((snapshots as any)?.[0] ?? mAny.attackerSnapshot);
+    const defender = sideUiFromSnapshot((snapshots as any)?.[1] ?? mAny.defenderSnapshot);
+
     return res.json({
       ok: true,
       outcome,
@@ -341,6 +389,8 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
       turns: timelineNorm.length,
       staminaAfter: spent.after, // snapshot de stamina luego de cobrar
       runnerVersion: RUNNER_VERSION,
+      attacker, // ← NUEVO
+      defender, // ← NUEVO
     });
   } catch (err: any) {
     console.error("POST /combat/resolve error:", err?.name, err?.message);

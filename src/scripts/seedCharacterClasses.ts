@@ -125,120 +125,6 @@ export const seedCharacterClasses = [
     talents: [],
   },
 
-  /* ───────────────────────────── Werewolf ──────────────────────────── */
-  {
-    name: "Werewolf",
-    description: "A relentless beast that dominates the hunt with brute ferocity.",
-    iconName: "Claw",
-    imageMainClassUrl: "/assets/classes/werewolf/werewolf_class.png",
-
-    primaryWeapons: ["Iron Claws", "Dual Daggers"],
-    secondaryWeapons: ["Shortsword", "Light Axe", "Feral Fangblade", "Savage Paw"],
-
-    defaultWeapon: "Iron Claws",
-    allowedWeapons: ["Iron Claws", "Dual Daggers", "Shortsword", "Light Axe", "Feral Fangblade", "Savage Paw", "Claw Gauntlets", "Beast Fangs", "Dire Talons", "Bloodclaw", "Rendfangs"],
-
-    // STR-leaning → physical passive
-    passiveDefaultSkill: {
-      enabled: true,
-      name: "Lupine Frenzy",
-      damageType: "physical",
-      shortDescEn: "+7 physical damage and +2 Attack Speed for 3 turns (scales with Fate).",
-      longDescEn: "On basic hits, may grant +7 physical damage and +2 Attack Speed for 3 turns. Chance = min(6% + Fate×1, 32%). No stacking; refresh duration.",
-      trigger: { check: "onBasicHit", scaleBy: "fate", baseChancePercent: 6, fateScalePerPoint: 1, maxChancePercent: 32 },
-      durationTurns: 3,
-      bonusDamage: 7,
-      extraEffects: { attackSpeedFlat: 2 },
-    },
-
-    baseStats: {
-      strength: 10,
-      dexterity: 8,
-      intelligence: 3,
-      vitality: 9,
-      physicalDefense: 7,
-      magicalDefense: 3,
-      luck: 4,
-      endurance: 8,
-      fate: 5,
-    },
-
-    resistances: {
-      fire: 4,
-      ice: 4,
-      lightning: 3,
-      poison: 5,
-      sleep: 3,
-      paralysis: 6,
-      confusion: 6,
-      fear: 5,
-      dark: 4,
-      holy: 2,
-      stun: 5,
-      bleed: 7,
-      curse: 4,
-      knockback: 6,
-      criticalChanceReduction: 3,
-      criticalDamageReduction: 4,
-    },
-
-    combatStats: {
-      // High ATK → slightly reduced HP vs tanks/casters
-      maxHP: 222,
-      attackPower: 28,
-      magicPower: 4,
-      criticalChance: 10,
-      criticalDamageBonus: 30,
-      attackSpeed: 7,
-      evasion: 8,
-      blockChance: 3,
-      blockValue: 5,
-      lifeSteal: 3,
-      damageReduction: 6,
-      movementSpeed: 7,
-    },
-
-    ultimateSkill: {
-      enabled: true,
-      name: "Savage Rend",
-      description: "A ferocious claw strike for +65% physical damage. Applies 'Bleed' (8 damage per turn for 2 turns).",
-      cooldownTurns: 6,
-      effects: { bonusDamagePercent: 65, applyDebuff: "bleed", bleedDamagePerTurn: 8, debuffDurationTurns: 2 },
-      proc: {
-        enabled: true,
-        procInfoEn: "At turn start, if ready: Chance = min(1% + Fate×1, 8%). On success, fires and goes on cooldown.",
-        trigger: { check: "onTurnStart", scaleBy: "fate", baseChancePercent: 1, fateScalePerPoint: 1, maxChancePercent: 8 },
-        respectCooldown: true,
-      },
-    },
-
-    subclasses: [
-      {
-        name: "Alpha",
-        slug: "alpha",
-        iconName: "Wolf",
-        imageSubclassUrl: "",
-        passives: [
-          { name: "Alpha Roar", description: "On ultimate use, gain +5% Attack for 2 turns." },
-          { name: "Predator Instinct", description: "On Dodge, gain +5% Attack for 1 turn." },
-        ],
-      },
-      {
-        name: "Berserker",
-        slug: "berserker",
-        iconName: "Flame",
-        imageSubclassUrl: "",
-        passives: [
-          { name: "Savage Wrath", description: "+10% damage while below 50% HP." },
-          { name: "Blood Frenzy", description: "Attacks have 20% chance to apply 1 Bleed stack." },
-        ],
-      },
-    ],
-
-    affinities: [],
-    talents: [],
-  },
-
   /* ──────────────────────────── Necromancer ────────────────────────── */
   {
     name: "Necromancer",
@@ -459,6 +345,120 @@ export const seedCharacterClasses = [
         passives: [
           { name: "Twin Shot", description: "Basic attack has 20% chance to hit twice." },
           { name: "Hexed Bullet", description: "Critical hits have 20% chance to apply Fear for 1 turn." },
+        ],
+      },
+    ],
+
+    affinities: [],
+    talents: [],
+  },
+
+  /* ───────────────────────────── Werewolf ──────────────────────────── */
+  {
+    name: "Werewolf",
+    description: "A relentless beast that dominates the hunt with brute ferocity.",
+    iconName: "Claw",
+    imageMainClassUrl: "/assets/classes/werewolf/werewolf_class.png",
+
+    primaryWeapons: ["Iron Claws", "Dual Daggers"],
+    secondaryWeapons: ["Shortsword", "Light Axe", "Feral Fangblade", "Savage Paw"],
+
+    defaultWeapon: "Iron Claws",
+    allowedWeapons: ["Iron Claws", "Dual Daggers", "Shortsword", "Light Axe", "Feral Fangblade", "Savage Paw", "Claw Gauntlets", "Beast Fangs", "Dire Talons", "Bloodclaw", "Rendfangs"],
+
+    // STR-leaning → physical passive
+    passiveDefaultSkill: {
+      enabled: true,
+      name: "Lupine Frenzy",
+      damageType: "physical",
+      shortDescEn: "+7 physical damage and +2 Attack Speed for 3 turns (scales with Fate).",
+      longDescEn: "On basic hits, may grant +7 physical damage and +2 Attack Speed for 3 turns. Chance = min(6% + Fate×1, 32%). No stacking; refresh duration.",
+      trigger: { check: "onBasicHit", scaleBy: "fate", baseChancePercent: 6, fateScalePerPoint: 1, maxChancePercent: 32 },
+      durationTurns: 3,
+      bonusDamage: 7,
+      extraEffects: { attackSpeedFlat: 2 },
+    },
+
+    baseStats: {
+      strength: 10,
+      dexterity: 8,
+      intelligence: 3,
+      vitality: 9,
+      physicalDefense: 7,
+      magicalDefense: 3,
+      luck: 4,
+      endurance: 8,
+      fate: 5,
+    },
+
+    resistances: {
+      fire: 4,
+      ice: 4,
+      lightning: 3,
+      poison: 5,
+      sleep: 3,
+      paralysis: 6,
+      confusion: 6,
+      fear: 5,
+      dark: 4,
+      holy: 2,
+      stun: 5,
+      bleed: 7,
+      curse: 4,
+      knockback: 6,
+      criticalChanceReduction: 3,
+      criticalDamageReduction: 4,
+    },
+
+    combatStats: {
+      // High ATK → slightly reduced HP vs tanks/casters
+      maxHP: 222,
+      attackPower: 28,
+      magicPower: 4,
+      criticalChance: 10,
+      criticalDamageBonus: 30,
+      attackSpeed: 7,
+      evasion: 8,
+      blockChance: 3,
+      blockValue: 5,
+      lifeSteal: 3,
+      damageReduction: 6,
+      movementSpeed: 7,
+    },
+
+    ultimateSkill: {
+      enabled: true,
+      name: "Savage Rend",
+      description: "A ferocious claw strike for +65% physical damage. Applies 'Bleed' (8 damage per turn for 2 turns).",
+      cooldownTurns: 6,
+      effects: { bonusDamagePercent: 65, applyDebuff: "bleed", bleedDamagePerTurn: 8, debuffDurationTurns: 2 },
+      proc: {
+        enabled: true,
+        procInfoEn: "At turn start, if ready: Chance = min(1% + Fate×1, 8%). On success, fires and goes on cooldown.",
+        trigger: { check: "onTurnStart", scaleBy: "fate", baseChancePercent: 1, fateScalePerPoint: 1, maxChancePercent: 8 },
+        respectCooldown: true,
+      },
+    },
+
+    subclasses: [
+      {
+        name: "Alpha",
+        slug: "alpha",
+        iconName: "Wolf",
+        imageSubclassUrl: "",
+        passives: [
+          { name: "Alpha Roar", description: "On ultimate use, gain +5% Attack for 2 turns." },
+          { name: "Predator Instinct", description: "On Dodge, gain +5% Attack for 1 turn." },
+        ],
+      },
+      {
+        name: "Berserker",
+        slug: "berserker",
+        iconName: "Flame",
+        imageSubclassUrl: "",
+        passives: [
+          { name: "Savage Wrath", description: "+10% damage while below 50% HP." },
+          { name: "Blood Frenzy", description: "Attacks have 20% chance to apply 1 Bleed stack." },
         ],
       },
     ],

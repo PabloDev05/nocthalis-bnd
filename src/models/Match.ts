@@ -1,4 +1,3 @@
-// src/models/Match.ts
 import { Schema, model, Types, Document, Model } from "mongoose";
 
 /* ───────── tipos base ───────── */
@@ -12,10 +11,10 @@ export type AbilityKind = "passive" | "ultimate";
 export interface TimelineEntry {
   turn: number;
   source: "attacker" | "defender";
-  event: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast";
+  event: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast"; // dot_tick se guarda en snapshots/log, la UI lo lee del runner
   damage: number; // >= 0
-  attackerHP: number; // HP del atacante después del evento
-  defenderHP: number; // HP del defensor después del evento
+  attackerHP: number; // HP del atacante DESPUÉS del evento
+  defenderHP: number; // HP del defensor DESPUÉS del evento
   ability?: {
     kind: AbilityKind; // "passive" | "ultimate"
     name?: string;
@@ -33,10 +32,7 @@ export interface WeaponSpec {
   type?: string; // ej. "sword" | "dagger" | "bow" | "staff"
 }
 
-/** Metadata de clase que podemos persistir sin acoplar:
- * - primaryWeapons: para aplicar bonus al daño del arma “de clase”
- * - passiveDefaultSkill / ultimateSkill: shapes libres (el runner puede leer lo que necesite)
- */
+/** Metadata de clase persistible sin acoplar: */
 export interface ClassMeta {
   primaryWeapons?: string[];
   passiveDefaultSkill?: any;
@@ -88,7 +84,7 @@ export interface CombatSnapshot {
   damage: number;
   playerHP: number;
   enemyHP: number;
-  events: string[]; // ej. ["player:attack","player:hit","player:crit","enemy:block"]
+  events: string[]; // ej. ["player:attack","player:hit","player:crit","enemy:block"] o "dot_tick"
   status?: Record<string, any>;
 }
 
@@ -180,7 +176,7 @@ const SnapshotSchema = new Schema<CharacterSnapshot>(
   { _id: false }
 );
 
-/** Timeline con eventos extendidos */
+/** Timeline con eventos extendidos (sin dot_tick aquí; los ticks van en snapshots/log) */
 const TimelineSchema = new Schema<TimelineEntry>(
   {
     turn: { type: Number, required: true, set: i },
@@ -213,7 +209,7 @@ const CombatSnapshotSchema = new Schema<CombatSnapshot>(
     damage: { type: Number, required: true, min: 0, set: i },
     playerHP: { type: Number, required: true, min: 0, set: i },
     enemyHP: { type: Number, required: true, min: 0, set: i },
-    events: { type: [String], default: [] },
+    events: { type: [String], default: [] }, // puede incluir "dot_tick"
     status: { type: Schema.Types.Mixed },
   },
   { _id: false }
@@ -255,7 +251,7 @@ const MatchSchema = new Schema<MatchDoc>(
       gold: { type: Number, default: 0, set: i },
     },
 
-    runnerVersion: { type: Number, default: 2, set: i }, // ← Fate runner v2
+    runnerVersion: { type: Number, default: 2, set: i }, // Fate runner v2
   },
   {
     timestamps: true,
@@ -284,7 +280,7 @@ MatchSchema.virtual("id").get(function (this: { _id: Types.ObjectId }) {
   return this._id.toString();
 });
 
-/* ───────── Índices (centralizados para evitar duplicados) ───────── */
+/* ───────── Índices ───────── */
 MatchSchema.index({ attackerUserId: 1 });
 MatchSchema.index({ defenderUserId: 1 });
 MatchSchema.index({ attackerCharacterId: 1 });

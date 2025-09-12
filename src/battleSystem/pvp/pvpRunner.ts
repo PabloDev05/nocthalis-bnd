@@ -1,14 +1,22 @@
-// src/battleSystem/pvp/pvpRunner.ts
 import { CombatManager } from "../core/CombatManager";
 import type { WeaponData } from "../core/Weapon";
 import { normalizeWeaponData, ensureWeaponOrDefault } from "../core/Weapon";
 import { mulberry32 } from "../core/RngFightSeed";
 
 /* ───────── Tipos del runner ───────── */
-export type TimelineEvent = "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast" | "dot_tick"; // ← nuevo: ticks de DoT (sangre/veneno/quemadura)
+export type TimelineEvent =
+  | "hit"
+  | "crit"
+  | "block"
+  | "miss"
+  | "passive_proc"
+  | "ultimate_cast"
+  | "dot_tick";
 
 export interface TimelineEntry {
   turn: number;
+  /** Compat con frontend (lee source o actor). */
+  source?: "attacker" | "defender";
   actor: "attacker" | "defender";
   damage: number;
   attackerHP: number;
@@ -25,7 +33,7 @@ export interface TimelineEntry {
 
 export interface PvpFightResult {
   outcome: "win" | "lose" | "draw";
-  turns: number; // solo impactos (hit/crit/block/miss)
+  turns: number;
   timeline: TimelineEntry[];
   log: string[];
   snapshots: Array<{
@@ -53,23 +61,26 @@ const clampInt = (n: any, min: number, max: number) => {
   const v = Math.round(i(n, min));
   return Math.max(min, Math.min(max, v));
 };
-
-function flagsToEvent(flags: { miss?: boolean; crit?: boolean; blocked?: boolean }): Exclude<TimelineEvent, "passive_proc" | "ultimate_cast" | "dot_tick"> {
-  if (flags?.miss) return "miss";
-  if (flags?.blocked) return "block";
-  if (flags?.crit) return "crit";
-  return "hit";
-}
 function isImpactEvent(ev: TimelineEvent) {
   return ev === "hit" || ev === "crit" || ev === "block" || ev === "miss";
 }
 
 /* ───────── armas y shape ───────── */
 function extractWeapons(raw: any): { main: WeaponData; off?: WeaponData | null } {
-  const mainRaw = raw?.weapon ?? raw?.equipment?.weapon ?? raw?.equipment?.mainHand ?? raw?.equipment?.mainWeapon ?? null;
-  const offRaw = raw?.offHand ?? raw?.offhand ?? raw?.equipment?.offHand ?? raw?.equipment?.offhand ?? raw?.equipment?.shield ?? null;
+  const mainRaw =
+    raw?.weapon ??
+    raw?.equipment?.weapon ??
+    raw?.equipment?.mainHand ??
+    raw?.equipment?.mainWeapon ??
+    null;
+  const offRaw =
+    raw?.offHand ??
+    raw?.offhand ??
+    raw?.equipment?.offHand ??
+    raw?.equipment?.offhand ??
+    raw?.equipment?.shield ??
+    null;
 
-  // Fallback a puños si no hay arma (lo maneja ensureWeaponOrDefault)
   const main = ensureWeaponOrDefault(mainRaw);
   const off = offRaw ? normalizeWeaponData(offRaw) : null;
   return { main, off };
@@ -87,7 +98,7 @@ function toCMEntity(raw: any, rng: () => number) {
     damageReduction: clamp01(pctToFrac(csRaw.damageReduction)),
     criticalChance: clamp01(pctToFrac(csRaw.criticalChance)),
     criticalDamageBonus: Math.max(0, pctToFrac(csRaw.criticalDamageBonus ?? 0.5)),
-    attackSpeed: Math.max(1, Math.round(toNum(csRaw.attackSpeed, 6))), // enteros (AS táctico)
+    attackSpeed: Math.max(1, Math.round(toNum(csRaw.attackSpeed, 6))),
     maxHP: toNum(csRaw.maxHP ?? raw?.maxHP, 100),
   };
 
@@ -96,22 +107,26 @@ function toCMEntity(raw: any, rng: () => number) {
 
   const { main, off } = extractWeapons(raw);
 
-  // bonus defensivo si el offhand es escudo
+  // bonus liviano de escudo
   if (off?.category === "shield") {
     combatNorm.blockChance = clamp01(combatNorm.blockChance + 0.05);
     combatNorm.damageReduction = clamp01(combatNorm.damageReduction + 0.03);
   }
 
-  // skills/clase → necesarios para que el CombatManager procee pasivas/ultimate
   const cls = raw?.class ?? {};
-  const passiveDefaultSkill = cls?.passiveDefaultSkill ?? undefined;
-  const ultimateSkill = cls?.ultimateSkill ?? undefined;
-  const primaryWeapons: string[] | undefined = Array.isArray(cls?.primaryWeapons) ? cls.primaryWeapons : undefined;
+  const passiveDefaultSkill =
+    cls?.passiveDefaultSkill ?? raw?.passiveDefaultSkill ?? undefined;
+  const ultimateSkill = cls?.ultimateSkill ?? raw?.ultimateSkill ?? undefined;
+  const primaryWeapons: string[] | undefined = Array.isArray(
+    cls?.primaryWeapons
+  )
+    ? cls.primaryWeapons
+    : undefined;
 
   return {
     name: raw?.name ?? raw?.username ?? "—",
     className: raw?.className ?? raw?.class?.name ?? undefined,
-    baseStats: raw?.baseStats ?? raw?.stats ?? {}, // Fate aquí
+    baseStats: raw?.baseStats ?? raw?.stats ?? {},
     stats: raw?.stats ?? {},
     resistances: raw?.resistances ?? {},
     equipment: raw?.equipment ?? {},
@@ -121,23 +136,30 @@ function toCMEntity(raw: any, rng: () => number) {
     combatStats: combatNorm,
     weaponMain: main,
     weaponOff: off ?? null,
-    classMeta: { primaryWeapons: primaryWeapons ?? raw?.class?.primaryWeapons ?? undefined },
+    classMeta: {
+      primaryWeapons: primaryWeapons ?? raw?.class?.primaryWeapons ?? undefined,
+    },
     passiveDefaultSkill,
     ultimateSkill,
   };
 }
 
-/* ───────── Runner PvP fino: delega todo al CombatManager ───────── */
-export function runPvp({ attackerSnapshot, defenderSnapshot, seed, maxRounds = 30 }: { attackerSnapshot: any; defenderSnapshot: any; seed: number; maxRounds?: number }): PvpFightResult {
+/* ───────── Runner PvP ───────── */
+export function runPvp({
+  attackerSnapshot,
+  defenderSnapshot,
+  seed,
+  maxRounds = 30,
+}: {
+  attackerSnapshot: any;
+  defenderSnapshot: any;
+  seed: number;
+  maxRounds?: number;
+}): PvpFightResult {
   const rng = mulberry32(seed || 1);
 
   const attacker = toCMEntity(attackerSnapshot, rng);
   const defender = toCMEntity(defenderSnapshot, rng);
-
-  if (DEBUG_PVP) {
-    console.log("[PVP] A.combat =", attacker.combat, "A.weaponMain =", attacker.weaponMain, "A.weaponOff =", attacker.weaponOff);
-    console.log("[PVP] D.combat =", defender.combat, "D.weaponMain =", defender.weaponMain, "D.weaponOff =", defender.weaponOff);
-  }
 
   const cm = new CombatManager(attacker, defender, { rng });
 
@@ -149,117 +171,180 @@ export function runPvp({ attackerSnapshot, defenderSnapshot, seed, maxRounds = 3
     cm.startRound(turn, () => {});
     const isAtkTurn = turn % 2 === 1;
 
-    // Ejecuta el turno con burst (el manager ya emite eventos y aplica estados)
     const out = isAtkTurn ? cm.playerAttack() : cm.enemyAttack();
 
-    // Construimos entries a partir de los eventos del manager + el agregado del golpe
     const actorSide: "player" | "enemy" = isAtkTurn ? "player" : "enemy";
-    const actorRole: "attacker" | "defender" = isAtkTurn ? "attacker" : "defender";
+    // el que actúa en este turno SIEMPRE es el attacker
+    const actorRole: "attacker" | "defender" = "attacker";
     const atkEntity = isAtkTurn ? attacker : defender;
 
-    // tags comunes de arma
     const baseTags: string[] = [];
-    if (atkEntity?.weaponMain?.slug) baseTags.push(`${actorSide}:weapon:${atkEntity.weaponMain.slug}`);
-    // si el offhand contribuye a daño (weapon/focus), lo taggeamos (sin depender de offhandUsed)
-    if (atkEntity?.weaponOff?.slug && (atkEntity.weaponOff.category === "weapon" || atkEntity.weaponOff.category === "focus")) {
+    if (atkEntity?.weaponMain?.slug)
+      baseTags.push(`${actorSide}:weapon:${atkEntity.weaponMain.slug}`);
+    if (
+      atkEntity?.weaponOff?.slug &&
+      (atkEntity.weaponOff.category === "weapon" ||
+        atkEntity.weaponOff.category === "focus")
+    ) {
       baseTags.push(`${actorSide}:weapon_off:${atkEntity.weaponOff.slug}`);
     }
 
-    // 1) eventos estructurados que trae el manager (dot_tick, ultimate_cast, passive_proc, hits…)
-    for (const ev of out.events ?? []) {
-      // map actor del manager ("player"/"enemy") al rol local en este turno ("attacker"/"defender")
-      const evActorIsPlayer = ev.actor === "player";
-      const evActorRole: "attacker" | "defender" = (isAtkTurn && evActorIsPlayer) || (!isAtkTurn && !evActorIsPlayer) ? "attacker" : "defender";
+    // Acumuladores para etiquetar el próximo "hit"
+    const impact = { crit: false, block: false };
 
+    // Helper: mapear actor "player/enemy" del evento -> "attacker/defender" en este turno
+    const toRole = (evActor: "player" | "enemy"): "attacker" | "defender" => {
+      // si es turno del atacante (player), player=attacker; si no, enemy=attacker
+      return (isAtkTurn && evActor === "player") || (!isAtkTurn && evActor === "enemy")
+        ? "attacker"
+        : "defender";
+    };
+
+    for (const ev of out.events ?? []) {
+      // ── DoT tick: respetamos el "owner" real del DoT ──
       if (ev.type === "dot_tick") {
-        const entryTags = [...baseTags, `${evActorRole}:dot:${ev.key}`];
+        const evRole = toRole(ev.actor);
         timeline.push({
           turn,
-          actor: evActorRole,
+          actor: evRole,
+          source: evRole,
           damage: ev.damage,
-          attackerHP: clampInt((cm as any).player?.currentHP, 0, attacker.maxHP),
-          defenderHP: clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP),
+          attackerHP: clampInt(cm.player.currentHP, 0, attacker.maxHP),
+          defenderHP: clampInt(cm.enemy.currentHP, 0, defender.maxHP),
           event: "dot_tick",
-          tags: entryTags,
+          tags: [...baseTags, `${evRole}:dot:${ev.key}`],
         });
         log.push(`• DoT (${ev.key}) hace ${ev.damage} de daño.`);
         continue;
       }
 
+      // ── Ultimate cast (la pegada llega como hit normal luego) ──
       if (ev.type === "ultimate_cast") {
+        const evRole = actorRole; // el que actúa en el turno
         timeline.push({
           turn,
-          actor: evActorRole,
+          actor: evRole,
+          source: evRole,
           damage: 0,
-          attackerHP: clampInt((cm as any).player?.currentHP, 0, attacker.maxHP),
-          defenderHP: clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP),
+          attackerHP: clampInt(cm.player.currentHP, 0, attacker.maxHP),
+          defenderHP: clampInt(cm.enemy.currentHP, 0, defender.maxHP),
           event: "ultimate_cast",
           ability: { kind: "ultimate", name: ev.name },
-          tags: [...baseTags, `${evActorRole}:ultimate:${ev.name}`],
+          tags: [...baseTags, `${evRole}:ultimate:${ev.name}`],
         });
-        log.push(`▶️ ${evActorRole === "attacker" ? "Atacante" : "Defensor"} lanza Ultimate: ${ev.name}`);
+        log.push(
+          `▶️ ${evRole === "attacker" ? "Atacante" : "Defensor"} lanza Ultimate: ${ev.name}`
+        );
         continue;
       }
 
+      // ── Pasivas: puede ser del atacante o del defensor (onHitOrBeingHit) ──
       if (ev.type === "passive_proc") {
+        const evRole = toRole(ev.actor);
         timeline.push({
           turn,
-          actor: evActorRole,
+          actor: evRole,
+          source: evRole,
           damage: 0,
-          attackerHP: clampInt((cm as any).player?.currentHP, 0, attacker.maxHP),
-          defenderHP: clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP),
+          attackerHP: clampInt(cm.player.currentHP, 0, attacker.maxHP),
+          defenderHP: clampInt(cm.enemy.currentHP, 0, defender.maxHP),
           event: "passive_proc",
-          ability: { kind: "passive", name: ev.name, durationTurns: ev.duration },
-          tags: [...baseTags, `${evActorRole}:passive:${ev.name}`, `${evActorRole}:passive:${ev.result}`],
+          ability: {
+            kind: "passive",
+            name: ev.name,
+            durationTurns: (ev as any).duration,
+          },
+          tags: [
+            ...baseTags,
+            `${evRole}:passive:${ev.name}`,
+            `${evRole}:passive:${(ev as any).result}`,
+          ],
         });
-        log.push(`✨ ${evActorRole === "attacker" ? "Atacante" : "Defensor"} pasiva ${ev.name} (${ev.result})`);
+        log.push(
+          `✨ ${evRole === "attacker" ? "Atacante" : "Defensor"} activa pasiva ${ev.name}`
+        );
         continue;
       }
 
-      // CRIT/BLOCK/MISS/HIT activos
-      if (ev.type === "crit" || ev.type === "block" || ev.type === "miss") {
-        // Estos eventos ya fueron reflejados en el propio "hit" posterior; los usamos como tags auxiliares
-        const tag = ev.type === "crit" ? `${evActorRole}:crit` : ev.type === "block" ? `${evActorRole}:blocked` : `${evActorRole}:miss`;
-        baseTags.push(tag);
+      // ── Flags previos al golpe ──
+      if (ev.type === "crit") {
+        impact.crit = true;
+        continue;
+      }
+      if (ev.type === "block") {
+        impact.block = true;
         continue;
       }
 
-      if (ev.type === "hit") {
-        const entryTags = [...baseTags, `${evActorRole}:attack`, `${evActorRole}:vfx:${ev.vfx}`];
-        const entry = {
+      // ── Miss "sueltos" (evasión/confusión/parálisis). Atribuimos al atacante del turno ──
+      if (ev.type === "miss") {
+        timeline.push({
           turn,
-          actor: evActorRole,
-          damage: ev.damage.final,
-          attackerHP: clampInt((cm as any).player?.currentHP, 0, attacker.maxHP),
-          defenderHP: clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP),
-          event: flagsToEvent({
-            // derivamos el tipo a partir del breakdown que ya registró el manager (tags previos)
-            // no tenemos miss/block/crit en este objeto, pero ya empujamos tags antes; el "hit" queda como tal
-          }),
-          tags: entryTags,
-        } as TimelineEntry;
+          actor: actorRole,
+          source: actorRole,
+          damage: 0,
+          attackerHP: clampInt(cm.player.currentHP, 0, attacker.maxHP),
+          defenderHP: clampInt(cm.enemy.currentHP, 0, defender.maxHP),
+          event: "miss",
+          tags: [...baseTags, "miss"],
+        });
+        const who = isAtkTurn
+          ? attackerSnapshot?.name ?? "Atacante"
+          : defenderSnapshot?.name ?? "Defensor";
+        log.push(`${who} falla el ataque.`);
+        // limpiamos flags por si acaso
+        impact.crit = false;
+        impact.block = false;
+        continue;
+      }
 
-        // Si tenés interés, podés inyectar breakdown en tags debug:
-        // entry.tags?.push(`d:df=${ev.damage.breakdown.defenseFactor}`, `d:elm=${ev.damage.breakdown.elementFactor}`);
+      // ── Golpe real con daño: convertimos a hit/crit/block según flags acumulados ──
+      if (ev.type === "hit") {
+        const dmg = (ev as any).damage?.final ?? 0;
+        const kind: TimelineEvent = impact.block
+          ? "block"
+          : impact.crit
+          ? "crit"
+          : "hit";
 
-        // En la UI solemos distinguir por tags; el event base lo dejamos "hit".
-        entry.event = "hit";
+        const entry: TimelineEntry = {
+          turn,
+          actor: actorRole,
+          source: actorRole,
+          damage: dmg,
+          attackerHP: clampInt(cm.player.currentHP, 0, attacker.maxHP),
+          defenderHP: clampInt(cm.enemy.currentHP, 0, defender.maxHP),
+          event: kind,
+          tags: [...baseTags, kind],
+        };
         timeline.push(entry);
 
-        const who = evActorRole === "attacker" ? attackerSnapshot?.name ?? "Atacante" : defenderSnapshot?.name ?? "Defensor";
-        const tgt = evActorRole === "attacker" ? defenderSnapshot?.name ?? "Defensor" : attackerSnapshot?.name ?? "Atacante";
-        log.push(`${who} golpea a ${tgt} por ${ev.damage.final}.`);
+        const who = isAtkTurn
+          ? attackerSnapshot?.name ?? "Atacante"
+          : defenderSnapshot?.name ?? "Defensor";
+        const tgt = isAtkTurn
+          ? defenderSnapshot?.name ?? "Defensor"
+          : attackerSnapshot?.name ?? "Atacante";
+
+        if (kind === "block") log.push(`${tgt} bloquea (recibe ${dmg}).`);
+        else if (kind === "crit") log.push(`${who} ¡CRÍTICO! a ${tgt} por ${dmg}.`);
+        else log.push(`${who} golpea a ${tgt} por ${dmg}.`);
+
+        // reset para el siguiente strike
+        impact.crit = false;
+        impact.block = false;
         continue;
       }
+
+      // otros tipos se ignoran de forma segura
     }
 
-    // Snapshot por fin de turno (agregamos daño total del burst)
     snapshots.push({
       round: turn,
       actor: actorSide,
       damage: Math.max(0, toNum(out.damage, 0)),
-      playerHP: clampInt((cm as any).player?.currentHP, 0, attacker.maxHP),
-      enemyHP: clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP),
+      playerHP: clampInt(cm.player.currentHP, 0, attacker.maxHP),
+      enemyHP: clampInt(cm.enemy.currentHP, 0, defender.maxHP),
       events: (out.events ?? []).map((e) => e.type),
       status: {},
     });
@@ -267,11 +352,10 @@ export function runPvp({ attackerSnapshot, defenderSnapshot, seed, maxRounds = 3
     if (cm.isCombatOver()) break;
   }
 
-  // Resolver ganador
   let w = cm.getWinner();
   if (!w) {
-    const aHP = clampInt((cm as any).player?.currentHP, 0, attacker.maxHP);
-    const dHP = clampInt((cm as any).enemy?.currentHP, 0, defender.maxHP);
+    const aHP = clampInt(cm.player.currentHP, 0, attacker.maxHP);
+    const dHP = clampInt(cm.enemy.currentHP, 0, defender.maxHP);
     const diff = aHP - dHP;
     const thr = Math.max(1, Math.round(0.01 * (aHP + dHP + 1)));
     if (Math.abs(diff) <= thr) w = null;
@@ -279,50 +363,10 @@ export function runPvp({ attackerSnapshot, defenderSnapshot, seed, maxRounds = 3
   }
   const outcome: "win" | "lose" | "draw" = !w ? "draw" : w === "player" ? "win" : "lose";
 
-  // ✅ turns = cantidad de IMPACTOS (hit/crit/block/miss), no cuenta dot_tick ni passive/ultimate_cast
-  const turns = timeline.reduce((acc, e) => acc + (isImpactEvent(e.event) ? 1 : 0), 0);
+  const turns = timeline.reduce(
+    (acc, e) => acc + (isImpactEvent(e.event) ? 1 : 0),
+    0
+  );
 
   return { outcome, turns, timeline, log, snapshots };
-}
-
-/* ───────── Adaptador a contrato de Match ───────── */
-export type MatchTimelineEvent = TimelineEvent;
-
-export interface MatchTimelineEntry {
-  turn: number;
-  source: "attacker" | "defender";
-  event: MatchTimelineEvent;
-  damage: number;
-  attackerHP: number;
-  defenderHP: number;
-  ability?: {
-    kind: "passive" | "ultimate";
-    name?: string;
-    id?: string;
-    durationTurns?: number;
-  };
-  tags?: string[];
-}
-
-export type RunPvpForMatchResult = {
-  outcome: "attacker" | "defender" | "draw";
-  timeline: MatchTimelineEntry[];
-};
-
-export function runPvpForMatch(attackerSnapshot: any, defenderSnapshot: any, seed: number, maxRounds: number = 30): RunPvpForMatchResult {
-  const { outcome, timeline } = runPvp({ attackerSnapshot, defenderSnapshot, seed, maxRounds });
-  const mappedOutcome: RunPvpForMatchResult["outcome"] = outcome === "win" ? "attacker" : outcome === "lose" ? "defender" : "draw";
-
-  const mappedTimeline: MatchTimelineEntry[] = timeline.map((e) => ({
-    turn: e.turn,
-    source: e.actor,
-    event: e.event,
-    damage: e.damage,
-    attackerHP: e.attackerHP,
-    defenderHP: e.defenderHP,
-    ability: e.ability ? { ...e.ability } : undefined,
-    tags: e.tags && e.tags.length ? e.tags.slice(0, 12) : undefined,
-  }));
-
-  return { outcome: mappedOutcome, timeline: mappedTimeline };
 }

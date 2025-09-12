@@ -1,7 +1,6 @@
-// src/controllers/character.controller.ts
 /* eslint-disable no-console */
 import { RequestHandler } from "express";
-import mongoose, { Types } from "mongoose";
+import mongoose from "mongoose";
 import { Character } from "../models/Character";
 import { CharacterClass } from "../models/CharacterClass";
 import { computeAvailablePoints } from "../services/allocation.service";
@@ -10,6 +9,9 @@ import type { BaseStats, CombatStats, Resistances } from "../interfaces/characte
 import { roundCombatStatsForResponse } from "../utils/characterFormat";
 
 const DBG = process.env.DEBUG_ALLOCATION === "1";
+
+/** Parámetro visual para el rango de daño mostrado en UI */
+const UI_DAMAGE_SPREAD = 0.2; // ±20%
 
 /** DTOs minimalistas y alineados al diseño nuevo */
 type SubclassDTO = {
@@ -23,8 +25,10 @@ type SubclassDTO = {
 type ClassMetaDTO = {
   id: string;
   name: string;
+  description?: string; // ✅ añadido para UI
   iconName: string;
   imageMainClassUrl: string;
+
   // info de armas para la UI (bono 10% si es primaria, lo aplica el motor)
   primaryWeapons: string[];
   secondaryWeapons: string[];
@@ -32,13 +36,15 @@ type ClassMetaDTO = {
   allowedWeapons: string[];
 
   passiveDefaultSkill: any | null;
+  passiveDefault?: any | null; // ✅ alias opcional por compatibilidad
   ultimateSkill: any | null;
+
   subclasses: SubclassDTO[];
 };
 
 type CharacterResponseDTO = {
   id: string;
-  userId: Types.ObjectId;
+  userId: string; // ✅ el frontend lo espera como string
   username: string;
 
   class: ClassMetaDTO;
@@ -50,6 +56,12 @@ type CharacterResponseDTO = {
   stats: BaseStats; // incluye fate
   resistances: Resistances;
   combatStats: CombatStats; // ya redondeado para UI
+
+  /** Campos de apoyo para UI */
+  primaryPowerKey: "attackPower" | "magicPower";
+  primaryPower: number;
+  uiDamageMin: number;
+  uiDamageMax: number;
 
   equipment: Record<string, string | null>;
   inventory: string[];
@@ -82,6 +94,7 @@ const mapSubclass = (s: any): SubclassDTO => ({
 const mapClassMeta = (raw: any): ClassMetaDTO => ({
   id: toId(raw),
   name: String(raw.name ?? ""),
+  description: String(raw.description ?? ""),
   iconName: String(raw.iconName ?? ""),
   imageMainClassUrl: String(raw.imageMainClassUrl ?? ""),
 
@@ -91,7 +104,9 @@ const mapClassMeta = (raw: any): ClassMetaDTO => ({
   allowedWeapons: Array.isArray(raw.allowedWeapons) ? raw.allowedWeapons : [],
 
   passiveDefaultSkill: raw.passiveDefaultSkill ?? null,
+  passiveDefault: raw.passiveDefault ?? raw.passiveDefaultSkill ?? null, // ✅ alias
   ultimateSkill: raw.ultimateSkill ?? null,
+
   subclasses: Array.isArray(raw.subclasses) ? raw.subclasses.map(mapSubclass) : [],
 });
 
@@ -110,6 +125,33 @@ function coerceBaseStats(src: any): BaseStats {
   };
 }
 
+/** Detecta si la clase es de corte mágico por nombre (fallback) */
+function isMagicClassName(name: string | undefined | null) {
+  const n = (name ?? "").toLowerCase();
+  return /necromancer|exorcist|mage|wizard|sorcer/.test(n);
+}
+
+/** Resuelve clave de poder primario y valor a partir de combatStats y clase */
+function resolvePrimaryPower(classMeta: ClassMetaDTO, cs: Partial<CombatStats> | null | undefined): { key: "attackPower" | "magicPower"; value: number } {
+  const ap = Math.round(Number(cs?.attackPower ?? 0));
+  const mp = Math.round(Number(cs?.magicPower ?? 0));
+
+  if (isMagicClassName(classMeta?.name)) {
+    return { key: "magicPower", value: mp };
+  }
+  // Si la clase no es claramente mágica, tomar el mayor
+  if (mp > ap) return { key: "magicPower", value: mp };
+  return { key: "attackPower", value: ap };
+}
+
+/** Calcula rango visual de daño en enteros (UI only) */
+function computeUiDamageRange(primary: number): { min: number; max: number } {
+  const p = Math.max(0, Math.round(Number(primary)));
+  const min = Math.max(1, Math.floor(p * (1 - UI_DAMAGE_SPREAD)));
+  const max = Math.max(min, Math.ceil(p * (1 + UI_DAMAGE_SPREAD)));
+  return { min, max };
+}
+
 /** GET /character/me */
 export const getMyCharacter: RequestHandler = async (req, res) => {
   try {
@@ -121,14 +163,34 @@ export const getMyCharacter: RequestHandler = async (req, res) => {
     // Personaje + username del User
     const characterDoc = await Character.findOne({ userId }).populate({ path: "userId", select: "username" }).lean();
 
-    if (!characterDoc) return res.status(404).json({ message: "Personaje no encontrado" });
+    if (!characterDoc) {
+      return res.status(404).json({ message: "Personaje no encontrado" });
+    }
 
     // Clase con metadatos nuevos
     const baseClassDoc = await CharacterClass.findById(characterDoc.classId)
-      .select("name iconName imageMainClassUrl primaryWeapons secondaryWeapons defaultWeapon allowedWeapons passiveDefaultSkill ultimateSkill subclasses baseStats")
+      .select(
+        [
+          "name",
+          "description",
+          "iconName",
+          "imageMainClassUrl",
+          "primaryWeapons",
+          "secondaryWeapons",
+          "defaultWeapon",
+          "allowedWeapons",
+          "passiveDefaultSkill",
+          "passiveDefault",
+          "ultimateSkill",
+          "subclasses",
+          "baseStats",
+        ].join(" ")
+      )
       .lean();
 
-    if (!baseClassDoc) return res.status(404).json({ message: "Clase base no encontrada" });
+    if (!baseClassDoc) {
+      return res.status(404).json({ message: "Clase base no encontrada" });
+    }
 
     const classMeta = mapClassMeta(baseClassDoc);
 
@@ -143,28 +205,37 @@ export const getMyCharacter: RequestHandler = async (req, res) => {
     if (DBG) console.log("[/character/me] availablePoints:", availablePoints);
 
     // Combat stats “bonitos” para UI
-    const combatStatsRounded = roundCombatStatsForResponse(characterDoc.combatStats || ({} as any));
+    const combatStatsRounded = roundCombatStatsForResponse((characterDoc.combatStats as CombatStats) || ({} as any));
 
     // username desde el populate (o desde req.user)
     const usernameFromPopulate = (characterDoc as any)?.userId?.username ?? (req.user as any)?.username ?? "—";
 
-    // Regeneración perezosa de stamina + snapshot
+    // Stamina (lazy regen)
     const staminaSnap = await getStaminaByUserId(userId);
+
+    // Poder primario y rango de daño para UI (enteros)
+    const { key: primaryPowerKey, value: primaryPower } = resolvePrimaryPower(classMeta, combatStatsRounded);
+    const { min: uiDamageMin, max: uiDamageMax } = computeUiDamageRange(primaryPower);
 
     const payload: CharacterResponseDTO = {
       id: String(characterDoc._id),
-      userId: characterDoc.userId as unknown as Types.ObjectId,
+      userId: String(characterDoc.userId), // ✅ como string
       username: usernameFromPopulate,
 
       class: classMeta,
       selectedSubclass,
 
-      level: characterDoc.level,
-      experience: characterDoc.experience,
+      level: Number(characterDoc.level ?? 1),
+      experience: Number(characterDoc.experience ?? 0),
 
       stats: characterDoc.stats as BaseStats,
       resistances: characterDoc.resistances as Resistances,
       combatStats: combatStatsRounded,
+
+      primaryPowerKey,
+      primaryPower,
+      uiDamageMin,
+      uiDamageMax,
 
       equipment: characterDoc.equipment,
       inventory: characterDoc.inventory,
@@ -172,7 +243,7 @@ export const getMyCharacter: RequestHandler = async (req, res) => {
       createdAt: characterDoc.createdAt as Date,
       updatedAt: characterDoc.updatedAt as Date,
 
-      availablePoints,
+      availablePoints: Number(availablePoints ?? 0),
       stamina: staminaSnap,
     };
 
@@ -182,5 +253,3 @@ export const getMyCharacter: RequestHandler = async (req, res) => {
     return res.status(500).json({ message: "Error interno del servidor" });
   }
 };
-
-export default getMyCharacter;

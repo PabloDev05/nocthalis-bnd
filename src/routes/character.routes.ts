@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../middleware/requireAuth";
 import { getCharacterClasses } from "../controllers/getCharacterClasses.controller";
 import { chooseClass } from "../controllers/chooseClass.controller";
-import { chooseSubclass } from "../controllers/chooseSubClass.controller"; // <- tu nombre actual
+import { chooseSubclass } from "../controllers/chooseSubClass.controller";
 import { getMyCharacter } from "../controllers/character.controller";
 import { getProgression } from "../controllers/characterProgression.controller";
 import { getInventory, equipItem, unequipItem, useConsumable } from "../controllers/characterEquipment.controller";
