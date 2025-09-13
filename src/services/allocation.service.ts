@@ -3,7 +3,7 @@
 // - Incluye FATE en las asignaciones.
 // - Sin curvas ni reglas por clase: el motor de combate se encarga de efectos.
 // - Compatible con cualquier clase de tu seed (Vampire, Werewolf, etc).
-
+// services/allocation.service.ts
 import type { BaseStats } from "../interfaces/character/CharacterClass.interface";
 
 /** Stats asignables (alineados a tu UI y al seed). */

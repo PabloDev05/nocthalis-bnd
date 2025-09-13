@@ -17,8 +17,8 @@ export { rollWeaponDamage, weaponTemplateFor, normalizeWeaponData, ensureWeaponO
 // ───────────────────────────────────────────
 // PvP Runner (canónico)
 // ───────────────────────────────────────────
-export { runPvp, runPvpForMatch } from "./pvp/pvpRunner";
-export type { PvpFightResult, TimelineEntry as PvpTimelineEntry, TimelineEvent as PvpTimelineEvent, RunPvpForMatchResult, MatchTimelineEntry } from "./pvp/pvpRunner";
+export { runPvp } from "./pvp/pvpRunner";
+export type { PvpFightResult, TimelineEntry as PvpTimelineEntry, TimelineEvent as PvpTimelineEvent } from "./pvp/pvpRunner";
 
 // ───────────────────────────────────────────
 // Entities (opcionales fuera del módulo)

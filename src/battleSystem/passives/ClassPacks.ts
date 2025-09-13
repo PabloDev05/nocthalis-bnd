@@ -1,7 +1,7 @@
 // Paquetes de pasivas por CLASE (Vampire, Werewolf, Necromancer, Revenant, Exorcist)
 // ⚠️ Solo emiten tags para UI/VFX/logs. NO modifican números ni estados del combate.
 // La matemática (daño, procs, estados, cooldowns) vive en el CombatManager.
-
+// passives/ClassPacks.ts
 import type { ClassPassivePack, PassiveHooks, SideKey } from "./types";
 
 const DBG = process.env.DEBUG_COMBAT === "1";

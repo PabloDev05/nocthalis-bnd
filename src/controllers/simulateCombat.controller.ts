@@ -1,4 +1,14 @@
 /* eslint-disable no-console */
+// Simulación y resolución de combates PvP (nuevo sistema)
+// src/controllers/simulateCombat.controller.ts
+// - No requiere characterId (usa el matchId que referencia los snapshots)
+// - Preview público (cualquiera puede ver la simulación de un match)
+// - Resolve autenticado (cobra stamina al usuario atacante)
+// - Guarda log y snapshots del combate en el match
+// - Actualiza stats de personajes y usuarios
+// - No guarda historial de combate (CombatResult) como en el sistema viejo
+// - No soporta PvE (usar /combat/preview y /combat/resolve del sistema viejo)
+
 import type { RequestHandler } from "express";
 import { Types } from "mongoose";
 import { Match } from "../models/Match";

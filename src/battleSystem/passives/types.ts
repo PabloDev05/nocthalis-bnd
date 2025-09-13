@@ -1,7 +1,7 @@
 // Tipos compartidos para packs de pasivas orientados a UI/VFX.
 // ⚠️ Estos hooks NO deben tocar la matemática del combate en esta capa.
 // El motor (CombatManager) ya resuelve procs, daño, estados, etc.
-
+// passives/types.ts
 export type SideKey = "player" | "enemy";
 
 /** Flags mínimos que describe un resultado de golpe */

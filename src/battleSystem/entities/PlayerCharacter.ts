@@ -1,3 +1,4 @@
+//entities/PlayerCharacter.ts
 import { CombatEntity } from "../../interfaces/combat/CombatEntity";
 import { BaseStats, Resistances, CombatStats } from "../../interfaces/character/CharacterClass.interface";
 

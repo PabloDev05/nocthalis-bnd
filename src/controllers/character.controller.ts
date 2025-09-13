@@ -1,4 +1,5 @@
 /* eslint-disable no-console */
+// src/controllers/character.controller.ts
 import { RequestHandler } from "express";
 import mongoose from "mongoose";
 import { Character } from "../models/Character";
