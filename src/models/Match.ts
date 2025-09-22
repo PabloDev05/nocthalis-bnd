@@ -1,3 +1,4 @@
+// src/models/Match.ts
 import { Schema, model, Types, Document, Model } from "mongoose";
 
 /* ───────── tipos base ───────── */
@@ -11,28 +12,35 @@ export type AbilityKind = "passive" | "ultimate";
 export interface TimelineEntry {
   turn: number;
   source: "attacker" | "defender";
-  event: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast"; // dot_tick se guarda en snapshots/log, la UI lo lee del runner
-  damage: number; // >= 0
-  attackerHP: number; // HP del atacante DESPUÉS del evento
-  defenderHP: number; // HP del defensor DESPUÉS del evento
+  event:
+    | "hit"
+    | "crit"
+    | "block"
+    | "miss"
+    | "passive_proc"
+    | "ultimate_cast"
+    | "dot_tick"; // ← añadido para DoT ticks
+  damage: number;
+  attackerHP: number;
+  defenderHP: number;
   ability?: {
-    kind: AbilityKind; // "passive" | "ultimate"
+    kind: AbilityKind;
     name?: string;
     id?: string;
     durationTurns?: number;
   };
-  tags?: string[]; // etiquetas libres para VFX
+  tags?: string[];
 }
 
-/* snapshot arma (prepara min/max + futuro offhand) */
+/* snapshot arma */
 export interface WeaponSpec {
   slug: string;
-  min: number; // daño mínimo del ítem
-  max: number; // daño máximo del ítem
-  type?: string; // ej. "sword" | "dagger" | "bow" | "staff"
+  min: number;
+  max: number;
+  type?: string;
 }
 
-/** Metadata de clase persistible sin acoplar: */
+/** Metadata de clase persistible */
 export interface ClassMeta {
   primaryWeapons?: string[];
   passiveDefaultSkill?: any;
@@ -45,31 +53,22 @@ export interface CharacterSnapshot {
   username: string;
   level: number;
   className: string;
-
-  // weapon/offHand aceptan string (legacy) o objeto (nuevo)
   weapon: string | WeaponSpec;
   offHand?: string | WeaponSpec;
-
-  // Metadata opcional de clase (bonus primarios / skill descriptors)
   classMeta?: ClassMeta;
-
-  stats: Record<string, number>; // base stats “congelados” al crear el match
-
+  stats: Record<string, number>; // flexible (incluye constitution, etc.)
   combat: {
     maxHP: number;
     attackPower: number;
     magicPower: number;
-
-    /** Porcentajes: 0..1 o 0..100; el runner normaliza. */
-    evasion: number;
-    blockChance: number;
-    damageReduction: number;
-    criticalChance: number;
-    criticalDamageBonus: number; // 0.5 => +50% o 50 => +50%
-    attackSpeed: number;
+    evasion: number;              // 0..100
+    blockChance: number;          // 0..100
+    damageReduction: number;      // 0..100
+    criticalChance: number;       // 0..100
+    criticalDamageBonus: number;  // 0..100
+    attackSpeed: number;          // >= 1
   };
-
-  currentHP: number; // = maxHP al crear el match
+  currentHP: number;
 }
 
 export interface Rewards {
@@ -84,53 +83,14 @@ export interface CombatSnapshot {
   damage: number;
   playerHP: number;
   enemyHP: number;
-  events: string[]; // ej. ["player:attack","player:hit","player:crit","enemy:block"] o "dot_tick"
+  events: string[];
   status?: Record<string, any>;
 }
 
-/* ───────── Documento principal ───────── */
-export interface MatchDoc extends Document {
-  _id: Types.ObjectId;
-
-  attackerUserId: Types.ObjectId;
-  defenderUserId: Types.ObjectId;
-  attackerCharacterId: Types.ObjectId;
-  defenderCharacterId: Types.ObjectId;
-
-  mode: MatchMode;
-
-  attackerSnapshot: CharacterSnapshot;
-  defenderSnapshot: CharacterSnapshot;
-
-  seed: number;
-  status: MatchStatus;
-
-  /** outcome POV atacante (para rankings/estadística rápida) */
-  outcome?: MatchOutcome;
-
-  /** winner POV motor ("player" | "enemy" | "draw") */
-  winner?: MatchWinner;
-
-  /** métricas guardadas del run */
-  turns?: number;
-  timeline?: TimelineEntry[];
-  log?: string[];
-  snapshots?: CombatSnapshot[];
-
-  rewards?: Rewards;
-
-  /** para migraciones/compat con runners nuevos */
-  runnerVersion?: number;
-
-  /** virtual */
-  id?: string;
-}
-
-/* ───────── helpers de casteo a entero ───────── */
+/* ───────── helpers ───────── */
 const i = (v: any) => (Number.isFinite(Number(v)) ? Math.floor(Number(v)) : v);
 
 /* ───────── subesquemas ───────── */
-
 const WeaponSpecSchema = new Schema<WeaponSpec>(
   {
     slug: { type: String, required: true },
@@ -151,24 +111,23 @@ const SnapshotSchema = new Schema<CharacterSnapshot>(
     username: { type: String, required: true },
     level: { type: Number, required: true, set: i },
     className: { type: String, required: true },
-
     weapon: { type: Schema.Types.Mixed, required: true },
-    offHand: { type: Schema.Types.Mixed, required: false },
-
-    classMeta: { type: Schema.Types.Mixed, required: false }, // primaryWeapons / skills
-
+    offHand: { type: Schema.Types.Mixed },
+    classMeta: { type: Schema.Types.Mixed },
     stats: { type: Schema.Types.Mixed, default: {} },
 
     combat: {
-      maxHP: { type: Number, required: true, set: i },
-      attackPower: { type: Number, required: true, set: i },
-      magicPower: { type: Number, required: true, set: i },
-      evasion: { type: Number, required: true },
-      blockChance: { type: Number, required: true },
-      damageReduction: { type: Number, required: true },
-      criticalChance: { type: Number, required: true },
-      criticalDamageBonus: { type: Number, required: true },
-      attackSpeed: { type: Number, required: true },
+      maxHP: { type: Number, required: true, set: i, min: 1 },
+      attackPower: { type: Number, required: true, set: i, min: 0 },
+      magicPower: { type: Number, required: true, set: i, min: 0 },
+
+      evasion: { type: Number, required: true, set: i, min: 0, max: 100 },
+      blockChance: { type: Number, required: true, set: i, min: 0, max: 100 },
+      damageReduction: { type: Number, required: true, set: i, min: 0, max: 100 },
+      criticalChance: { type: Number, required: true, set: i, min: 0, max: 100 },
+      criticalDamageBonus: { type: Number, required: true, set: i, min: 0, max: 100 },
+
+      attackSpeed: { type: Number, required: true, set: i, min: 1 },
     },
 
     currentHP: { type: Number, required: true, min: 0, set: i },
@@ -176,27 +135,24 @@ const SnapshotSchema = new Schema<CharacterSnapshot>(
   { _id: false }
 );
 
-/** Timeline con eventos extendidos (sin dot_tick aquí; los ticks van en snapshots/log) */
 const TimelineSchema = new Schema<TimelineEntry>(
   {
-    turn: { type: Number, required: true, set: i },
+    turn: { type: Number, required: true, set: i, min: 1 },
     source: { type: String, enum: ["attacker", "defender"], required: true },
     event: {
       type: String,
-      enum: ["hit", "crit", "block", "miss", "passive_proc", "ultimate_cast"],
+      enum: ["hit", "crit", "block", "miss", "passive_proc", "ultimate_cast", "dot_tick"], // ← añadido
       required: true,
     },
     damage: { type: Number, required: true, min: 0, set: i },
     attackerHP: { type: Number, required: true, min: 0, set: i },
     defenderHP: { type: Number, required: true, min: 0, set: i },
-
     ability: {
       kind: { type: String, enum: ["passive", "ultimate"] },
       name: { type: String },
       id: { type: String },
       durationTurns: { type: Number, set: i },
     },
-
     tags: { type: [String], default: [] },
   },
   { _id: false }
@@ -204,18 +160,52 @@ const TimelineSchema = new Schema<TimelineEntry>(
 
 const CombatSnapshotSchema = new Schema<CombatSnapshot>(
   {
-    round: { type: Number, required: true, set: i },
+    round: { type: Number, required: true, set: i, min: 1 },
     actor: { type: String, enum: ["player", "enemy"], required: true },
     damage: { type: Number, required: true, min: 0, set: i },
     playerHP: { type: Number, required: true, min: 0, set: i },
     enemyHP: { type: Number, required: true, min: 0, set: i },
-    events: { type: [String], default: [] }, // puede incluir "dot_tick"
+    events: { type: [String], default: [] },
     status: { type: Schema.Types.Mixed },
   },
   { _id: false }
 );
 
 /* ───────── Match ───────── */
+export interface MatchDoc extends Document {
+  _id: Types.ObjectId;
+
+  attackerUserId: Types.ObjectId;
+  defenderUserId: Types.ObjectId;
+  attackerCharacterId: Types.ObjectId;
+  defenderCharacterId: Types.ObjectId;
+
+  mode: MatchMode;
+
+  attackerSnapshot: CharacterSnapshot;
+  defenderSnapshot: CharacterSnapshot;
+
+  seed: number;
+  status: MatchStatus;
+
+  outcome?: MatchOutcome;
+  winner?: MatchWinner;
+
+  turns?: number;
+  timeline?: TimelineEntry[];
+  log?: string[];
+  snapshots?: CombatSnapshot[];
+
+  rewards?: Rewards;
+
+  runnerVersion?: number;
+
+  /** idempotencia de creación de match desde el cliente */
+  clientKey?: string | null;
+
+  /** virtual */
+  id?: string;
+}
 
 const MatchSchema = new Schema<MatchDoc>(
   {
@@ -240,7 +230,7 @@ const MatchSchema = new Schema<MatchDoc>(
     outcome: { type: String, enum: ["attacker", "defender", "draw"] },
     winner: { type: String, enum: ["player", "enemy", "draw"] },
 
-    turns: { type: Number, set: i },
+    turns: { type: Number, set: i, min: 0 },
     timeline: { type: [TimelineSchema], default: [] },
     log: { type: [String], default: [] },
     snapshots: { type: [CombatSnapshotSchema], default: [] },
@@ -251,7 +241,10 @@ const MatchSchema = new Schema<MatchDoc>(
       gold: { type: Number, default: 0, set: i },
     },
 
-    runnerVersion: { type: Number, default: 2, set: i }, // Fate runner v2
+    runnerVersion: { type: Number, default: 2, set: i },
+
+    /** idempotencia */
+    clientKey: { type: String, default: null, index: true },
   },
   {
     timestamps: true,
@@ -293,6 +286,12 @@ MatchSchema.index({ attackerUserId: 1, createdAt: -1 });
 MatchSchema.index({ defenderUserId: 1, createdAt: -1 });
 MatchSchema.index({ mode: 1, createdAt: -1 });
 MatchSchema.index({ seed: 1 });
+
+/** Unicidad “suave” por atacante+clientKey para idempotencia */
+MatchSchema.index(
+  { attackerUserId: 1, clientKey: 1 },
+  { unique: true, partialFilterExpression: { clientKey: { $type: "string" } } }
+);
 
 export const Match: Model<MatchDoc> = model<MatchDoc>("Match", MatchSchema);
 export type { MatchDoc as TMatchDoc };

@@ -1,3 +1,4 @@
+// src/controllers/characterProgression.controller.ts
 /* eslint-disable no-console */
 import { Request, Response } from "express";
 import mongoose from "mongoose";
@@ -7,24 +8,28 @@ import { computeProgression } from "../services/progression.service";
 import { computeAvailablePoints } from "../services/allocation.service";
 import type { BaseStats } from "../interfaces/character/CharacterClass.interface";
 
-/** Normaliza a BaseStats (incluye fate) */
+/* Helpers enteros */
+const toInt = (v: any, d = 0) => {
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) ? n : d;
+};
+
 function coerceBaseStats(src: any): BaseStats {
   return {
-    strength: Number(src?.strength ?? 0),
-    dexterity: Number(src?.dexterity ?? 0),
-    intelligence: Number(src?.intelligence ?? 0),
-    vitality: Number(src?.vitality ?? 0),
-    physicalDefense: Number(src?.physicalDefense ?? 0),
-    magicalDefense: Number(src?.magicalDefense ?? 0),
-    luck: Number(src?.luck ?? 0),
-    endurance: Number(src?.endurance ?? 0),
-    fate: Number(src?.fate ?? 0),
+    strength: toInt(src?.strength, 0),
+    dexterity: toInt(src?.dexterity, 0),
+    intelligence: toInt(src?.intelligence, 0),
+    constitution: toInt(src?.constitution, 0), 
+    physicalDefense: toInt(src?.physicalDefense, 0),
+    magicalDefense: toInt(src?.magicalDefense, 0),
+    luck: toInt(src?.luck, 0),
+    endurance: toInt(src?.endurance, 0),
+    fate: toInt(src?.fate, 0),
   };
 }
 
 /**
  * GET /character/progression
- * Curva acumulada; agrega availablePoints y canAllocateNow para el UI.
  */
 export const getProgression = async (req: Request, res: Response) => {
   try {
@@ -36,23 +41,25 @@ export const getProgression = async (req: Request, res: Response) => {
     const character = await Character.findOne({ userId }).lean();
     if (!character) return res.status(404).json({ message: "Personaje no encontrado" });
 
-    const exp = Number(character.experience ?? 0);
-    const lvl = Number(character.level ?? 1);
+    const exp = toInt(character.experience, 0);
+    const lvl = toInt(character.level, 1);
 
-    // Progresión (enteros)
+    // Barra y nivel efectivo (enteros)
     const p = computeProgression(exp, lvl);
 
-    // Cálculo de availablePoints (igual que /character/me)
+    // Puntos disponibles basados en (stats actuales - baseStats) y nivel efectivo
     let availablePoints = 0;
-    const classDoc = await CharacterClass.findById(character.classId).select("baseStats").lean();
+    const classDoc = await CharacterClass.findById(character.classId)
+      .select("baseStats")
+      .lean();
+
     if (classDoc) {
-      const statsBS = coerceBaseStats(character.stats || {});
-      const baseBS = coerceBaseStats(classDoc.baseStats || {});
-      availablePoints = computeAvailablePoints(p.level, statsBS, baseBS);
+      const statsNow = coerceBaseStats(character.stats || {});
+      const statsBase = coerceBaseStats(classDoc.baseStats || {});
+      availablePoints = computeAvailablePoints(p.level, statsNow, statsBase);
     }
 
-    // Flag para el front: si ya podés asignar ahora (porque subiste o alcanzaste el umbral)
-    const pendingLevels = Number(p.pendingLevels ?? 0);
+    const pendingLevels = toInt(p.pendingLevels, 0);
     const canAllocateNow = availablePoints > 0 || pendingLevels > 0;
 
     return res.json({

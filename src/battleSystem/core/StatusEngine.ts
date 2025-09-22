@@ -1,4 +1,5 @@
 // src/battleSystem/core/StatusEngine.ts
+/* eslint-disable no-console */
 /**
  * Lleva el estado activo de buffs/debuffs en cada bando.
  * - Mantiene stacks, duración y magnitudes (value/dotDamage).
@@ -8,18 +9,24 @@
  *   (c) reducir el daño por tick de DoT (bleed/poison/burn)
  * - Los DoT tiquean en "turnStart" (PvP táctico).
  *
- * 👉 Ahora el tick emite un ENTRANTE estructurado para que el CombatManager
- *    lo transforme en un evento `dot_tick` (distinto del `hit` normal).
+ * 👉 El tick emite un payload que el CombatManager convierte en evento `dot_tick`
+ *    (separado de `hit`) para logs/VFX.
  */
 
 import { STATUS_CATALOG, getStatusDef } from "../constants/status";
 import type { StatusKey } from "../constants/status";
 
 const DBG = process.env.DEBUG_COMBAT === "1";
-export type Side = "player" | "enemy";
 
-/** Defaults para magnitudes si no se especifican al aplicar. */
-const DEFAULTS = {
+/* ========== Tipos de módulo (¡fuera de la clase!) ========== */
+export type Side = "player" | "enemy";
+export type DotKey = "bleed" | "poison" | "burn";
+
+/** Payload que emite un tick de DoT para que el Manager loguee `dot_tick`. */
+export type DotTickEvent = { actor: Side; victim: Side; key: DotKey; dmg: number };
+
+/** Defaults de magnitudes y pps; exportados para tuning/balance. */
+export const STATUS_DEFAULTS = {
   bleedPerStack: 6,
   poisonPerStack: 5,
   burnPerStack: 5,
@@ -30,17 +37,17 @@ const DEFAULTS = {
   fortifyPct: 5,
   shieldPct: 8,
 
-  fearPP: 10,
-  hasteFlat: 2,
-  shockFlat: -2,
-};
+  fearPP: 10,     // puntos porcentuales de reducción de crítico
+  hasteFlat: 2,   // +AS por stack
+  shockFlat: -2,  // -AS por stack
+} as const;
 
 export interface StatusInstance {
   key: StatusKey;
   stacks: number;
   turnsLeft: number; // rondas
   source?: Side;
-  value?: number; // magnitud por stack (fear/curse/etc.)
+  value?: number;     // magnitud por stack (fear/curse/etc.)
   dotDamage?: number; // dps por stack (DoT)
 }
 
@@ -204,10 +211,10 @@ export class StatusEngine {
 
   // ───────────────── Ticks de DoT ─────────────────
   /**
-   * Devuelve el daño total aplicado y llama `emit` por cada stackable DoT.
+   * Devuelve el daño total aplicado y llama `emit` por cada DoT en tick.
    * El callback recibe un payload estructurado para que el manager emita `dot_tick`.
    */
-  public tickDots(victim: Side, when: "turnStart" | "turnEnd", emit: (e: { actor: Side; victim: Side; key: "bleed" | "poison" | "burn"; dmg: number }) => void): number {
+  public tickDots(victim: Side, when: "turnStart" | "turnEnd", emit: (e: DotTickEvent) => void): number {
     const map = this.states[victim];
     if (!map.size) return 0;
     let total = 0;
@@ -220,14 +227,18 @@ export class StatusEngine {
       const res = clamp(this.getResistance(victim, key) || 0, 0, 100);
       const resFactor = Math.max(0, 1 - res / 100);
 
-      const fallback = key === "bleed" ? DEFAULTS.bleedPerStack : key === "poison" ? DEFAULTS.poisonPerStack : DEFAULTS.burnPerStack;
+      const fallback =
+        key === "bleed" ? STATUS_DEFAULTS.bleedPerStack :
+        key === "poison" ? STATUS_DEFAULTS.poisonPerStack :
+        STATUS_DEFAULTS.burnPerStack;
+
       const perStack = inst.dotDamage ?? fallback;
       const raw = Math.max(0, toInt(perStack) * Math.max(1, inst.stacks));
       const dmg = Math.floor(raw * resFactor);
       if (dmg > 0) {
         total += dmg;
         const actor = inst.source ?? (victim === "player" ? "enemy" : "player");
-        emit({ actor, victim, key, dmg });
+        emit({ actor, victim, key: key as DotKey, dmg });
       }
     }
     return total;
@@ -237,34 +248,34 @@ export class StatusEngine {
   public attackSpeedFlat(side: Side): number {
     const haste = this.states[side].get("haste");
     const shock = this.states[side].get("shock");
-    const hasteVal = (haste?.value ?? DEFAULTS.hasteFlat) * (haste?.stacks ?? 0);
-    const shockVal = (shock?.value ?? DEFAULTS.shockFlat) * (shock?.stacks ?? 0);
+    const hasteVal = (haste?.value ?? STATUS_DEFAULTS.hasteFlat) * (haste?.stacks ?? 0);
+    const shockVal = (shock?.value ?? STATUS_DEFAULTS.shockFlat) * (shock?.stacks ?? 0);
     return toInt(hasteVal + shockVal, 0);
   }
   public critChanceReductionFrac(side: Side): number {
     const fear = this.states[side].get("fear");
     if (!fear) return 0;
-    const per = (fear.value ?? DEFAULTS.fearPP) / 100;
+    const per = (fear.value ?? STATUS_DEFAULTS.fearPP) / 100;
     return clamp(per * Math.max(1, fear.stacks), 0, 1);
   }
   public attackPowerMul(side: Side): number {
     const curse = this.states[side].get("curse");
     const rage = this.states[side].get("rage");
-    const curMul = curse ? Math.max(0, 1 - (curse.value ?? DEFAULTS.cursePct) / 100) ** Math.max(1, curse.stacks) : 1;
-    const ragMul = rage ? (1 + (rage.value ?? DEFAULTS.ragePct) / 100) ** Math.max(1, rage.stacks) : 1;
+    const curMul = curse ? Math.max(0, 1 - (curse.value ?? STATUS_DEFAULTS.cursePct) / 100) ** Math.max(1, curse.stacks) : 1;
+    const ragMul = rage ? (1 + (rage.value ?? STATUS_DEFAULTS.ragePct) / 100) ** Math.max(1, rage.stacks) : 1;
     return Math.max(0, curMul * ragMul);
   }
   public extraDamageReduction(side: Side): number {
     const fortify = this.states[side].get("fortify");
     const shield = this.states[side].get("shield");
-    const f = fortify ? ((fortify.value ?? DEFAULTS.fortifyPct) / 100) * Math.max(1, fortify.stacks) : 0;
-    const s = shield ? ((shield.value ?? DEFAULTS.shieldPct) / 100) * Math.max(1, shield.stacks) : 0;
+    const f = fortify ? ((fortify.value ?? STATUS_DEFAULTS.fortifyPct) / 100) * Math.max(1, fortify.stacks) : 0;
+    const s = shield ? ((shield.value ?? STATUS_DEFAULTS.shieldPct) / 100) * Math.max(1, shield.stacks) : 0;
     return clamp(f + s, 0, 1);
   }
   public physDefMul(side: Side): number {
     const w = this.states[side].get("weaken");
     if (!w) return 1;
-    const m = Math.max(0, 1 - (w.value ?? DEFAULTS.weakenPct) / 100);
+    const m = Math.max(0, 1 - (w.value ?? STATUS_DEFAULTS.weakenPct) / 100);
     return Math.max(0, m ** Math.max(1, w.stacks));
   }
 

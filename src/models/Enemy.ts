@@ -137,7 +137,7 @@ const EnemySchema = new Schema<EnemyDoc>(
       strength: { type: Number, default: 0 },
       dexterity: { type: Number, default: 0 },
       intelligence: { type: Number, default: 0 },
-      vitality: { type: Number, default: 0 },
+      constitution: { type: Number, default: 0 },
       physicalDefense: { type: Number, default: 0 },
       magicalDefense: { type: Number, default: 0 },
       luck: { type: Number, default: 0 },
@@ -246,7 +246,7 @@ EnemySchema.pre("save", function (next) {
 EnemySchema.virtual("powerScore").get(function (this: EnemyDoc) {
   const s = this.stats || ({} as any);
   const c = this.combatStats || ({} as any);
-  const baseBlock = (s.strength + s.dexterity + s.intelligence + s.vitality + s.physicalDefense + s.magicalDefense + s.endurance + s.luck + (s.fate ?? 0)) * 1.0;
+  const baseBlock = (s.strength + s.dexterity + s.intelligence + s.constitution + s.physicalDefense + s.magicalDefense + s.endurance + s.luck + (s.fate ?? 0)) * 1.0;
   const offensive = (c.attackPower + c.magicPower) * 1.5;
   const hpWeight = (c.maxHP || 0) * 0.2;
   return baseBlock + offensive + hpWeight;

@@ -1,4 +1,5 @@
 /* eslint-disable no-console */
+//src/battleSystem/core/SimulateCombat.ts
 import type { RequestHandler } from "express";
 import { Types } from "mongoose";
 import { Match } from "../../models/Match";
@@ -6,7 +7,7 @@ import { Character } from "../../models/Character";
 import { runPvp } from "../../battleSystem";
 import { computeProgression } from "../../services/progression.service";
 import { spendStamina, getStaminaByUserId } from "../../services/stamina.service";
-import { weaponTemplateFor } from "../../battleSystem/core/Weapon"; // ← NUEVO
+import { weaponTemplateFor } from "../../battleSystem/core/Weapon"; // ← usa la plantilla para min/max
 
 /** Costo de stamina por pelea PvP (se cobra al resolver) */
 const STAMINA_COST_PVP = 10;
@@ -95,7 +96,8 @@ type TLIn =
       turn?: number;
       source?: "attacker" | "defender";
       actor?: "attacker" | "defender";
-      event?: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast";
+      /** ahora aceptamos también 'dot_tick' */
+      event?: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast" | "dot_tick";
       damage?: number;
       attackerHP?: number;
       defenderHP?: number;
@@ -108,6 +110,9 @@ type TLIn =
         id?: string;
         durationTurns?: number;
       };
+      /** para dot_tick solemos traer key ('bleed'|'poison'|'burn') y victim */
+      key?: "bleed" | "poison" | "burn";
+      victim?: "attacker" | "defender";
       tags?: string[];
     }
   | any;
@@ -143,7 +148,7 @@ function normalizeTimeline(items: TLIn[] | undefined | null) {
     const ev = it.event as TLIn["event"];
     const commonTags = Array.isArray(it.tags) ? it.tags.slice(0, 12) : Array.isArray(it.events) ? it.events.slice(0, 12) : [];
 
-    // si es un evento de habilidad, lo preservamos y default damage=0 si no vino
+    // eventos de habilidad (sin daño o daño 0 si no vino)
     if (ev === "passive_proc" || ev === "ultimate_cast") {
       return {
         turn,
@@ -164,7 +169,24 @@ function normalizeTimeline(items: TLIn[] | undefined | null) {
       };
     }
 
-    // eventos de golpeo
+    // nuevo: tick de DoT
+    if (ev === "dot_tick") {
+      const dmg = Math.max(0, toInt(it.damage, 0));
+      const dotKey = (it.key || "") as TLIn["key"];
+      const tags = [...commonTags, "dot", dotKey || ""].filter(Boolean).slice(0, 12);
+      return {
+        turn,
+        source,
+        event: "dot_tick" as const,
+        damage: dmg,
+        attackerHP,
+        defenderHP,
+        // guardamos la key del dot como tag para UI/analytics
+        tags,
+      };
+    }
+
+    // eventos de golpeo (default: si trae daño => hit, si no => miss)
     const event: "hit" | "crit" | "block" | "miss" = (ev as any) ?? (toInt(it.damage, 0) > 0 ? "hit" : "miss");
     const damage = Math.max(0, toInt(it.damage, 0));
 
@@ -191,6 +213,7 @@ function sideUiFromSnapshot(snap: any) {
       ...(snap?.combat ?? {}),
       minDamage: w.minDamage,
       maxDamage: w.maxDamage,
+      // compat con props que tal vez mira el front
       damageMin: w.minDamage,
       damageMax: w.maxDamage,
     },
@@ -232,8 +255,8 @@ export const simulateCombatPreviewController: RequestHandler = async (req, res) 
       log,
       snapshots,
       runnerVersion: RUNNER_VERSION,
-      attacker, // ← NUEVO
-      defender, // ← NUEVO
+      attacker, // UI meta
+      defender, // UI meta
     });
   } catch (err) {
     console.error("GET /combat/simulate (preview) error:", err);
@@ -274,8 +297,8 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
       log,
       snapshots,
       runnerVersion: RUNNER_VERSION,
-      attacker, // ← NUEVO
-      defender, // ← NUEVO
+      attacker, // UI meta
+      defender, // UI meta
     });
   } catch (err) {
     console.error("POST /combat/simulate error:", err);
@@ -321,8 +344,8 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
         turns: Number(mAny.turns ?? mAny.timeline?.length ?? 0),
         alreadyResolved: true,
         runnerVersion: Number(mAny.runnerVersion ?? RUNNER_VERSION),
-        attacker, // ← NUEVO
-        defender, // ← NUEVO
+        attacker,
+        defender,
       });
     }
 
@@ -389,8 +412,8 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
       turns: timelineNorm.length,
       staminaAfter: spent.after, // snapshot de stamina luego de cobrar
       runnerVersion: RUNNER_VERSION,
-      attacker, // ← NUEVO
-      defender, // ← NUEVO
+      attacker,
+      defender,
     });
   } catch (err: any) {
     console.error("POST /combat/resolve error:", err?.name, err?.message);

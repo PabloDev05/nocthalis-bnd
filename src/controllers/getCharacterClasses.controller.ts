@@ -5,33 +5,32 @@ import { CharacterClass } from "../models/CharacterClass";
 /**
  * GET /character/classes
  * Devuelve la lista de clases para la UI de selección.
- * - Campos nuevos: primaryWeapons, secondaryWeapons, defaultWeapon, allowedWeapons,
- *   passiveDefaultSkill, ultimateSkill.
+ * - Incluye: primaryWeapons, secondaryWeapons, defaultWeapon, allowedWeapons,
+ *   passiveDefaultSkill, ultimateSkill, baseStats, resistances, combatStats, subclasses.
  * - Compat: expone también `passiveDefault` como alias de `passiveDefaultSkill`.
+ * - No hace transformaciones: si tus baseStats ya usan `constitution`, se devuelven tal cual.
  */
 export const getCharacterClasses = async (_req: Request, res: Response) => {
   try {
     const docs = await CharacterClass.find()
-      .select(
-        [
-          "name",
-          "description",
-          "iconName",
-          "imageMainClassUrl",
-          "primaryWeapons",
-          "secondaryWeapons",
-          "defaultWeapon",
-          "allowedWeapons",
-          "passiveDefaultSkill",
-          "ultimateSkill",
-          "baseStats",
-          "resistances",
-          "combatStats",
-          "subclasses",
-          "createdAt",
-          "updatedAt",
-        ].join(" ")
-      )
+      .select([
+        "name",
+        "description",
+        "iconName",
+        "imageMainClassUrl",
+        "primaryWeapons",
+        "secondaryWeapons",
+        "defaultWeapon",
+        "allowedWeapons",
+        "passiveDefaultSkill",
+        "ultimateSkill",
+        "baseStats",
+        "resistances",
+        "combatStats",
+        "subclasses",
+        "createdAt",
+        "updatedAt",
+      ].join(" "))
       .sort({ name: 1 })
       .lean({ virtuals: true })
       .exec();
@@ -43,20 +42,20 @@ export const getCharacterClasses = async (_req: Request, res: Response) => {
       iconName: c.iconName,
       imageMainClassUrl: c.imageMainClassUrl,
 
-      // Armas (nuevo)
-      primaryWeapons: c.primaryWeapons ?? [],
-      secondaryWeapons: c.secondaryWeapons ?? [],
+      // Armas
+      primaryWeapons: Array.isArray(c.primaryWeapons) ? c.primaryWeapons : [],
+      secondaryWeapons: Array.isArray(c.secondaryWeapons) ? c.secondaryWeapons : [],
       defaultWeapon: c.defaultWeapon ?? null,
-      allowedWeapons: c.allowedWeapons ?? [],
+      allowedWeapons: Array.isArray(c.allowedWeapons) ? c.allowedWeapons : [],
 
-      // Skills (nuevo)
+      // Skills
       passiveDefaultSkill: c.passiveDefaultSkill ?? null,
       ultimateSkill: c.ultimateSkill ?? null,
 
-      // Compat backward (si algún front viejo aún lo lee)
+      // Compat backward
       passiveDefault: c.passiveDefaultSkill ?? null,
 
-      // Bloques base
+      // Bloques base (se devuelven tal cual estén en la clase)
       baseStats: c.baseStats ?? {},
       resistances: c.resistances ?? {},
       combatStats: c.combatStats ?? {},

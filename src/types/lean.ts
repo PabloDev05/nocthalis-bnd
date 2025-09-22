@@ -9,7 +9,7 @@ export type Stats = {
   strength: number;
   dexterity: number;
   intelligence: number;
-  vitality: number;
+  constitution: number;
   physicalDefense: number;
   magicalDefense: number;
   luck: number;

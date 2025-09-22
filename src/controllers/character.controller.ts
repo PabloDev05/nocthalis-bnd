@@ -1,20 +1,22 @@
-/* eslint-disable no-console */
 // src/controllers/character.controller.ts
+/* eslint-disable no-console */
 import { RequestHandler } from "express";
 import mongoose from "mongoose";
 import { Character } from "../models/Character";
 import { CharacterClass } from "../models/CharacterClass";
 import { computeAvailablePoints } from "../services/allocation.service";
 import { getStaminaByUserId } from "../services/stamina.service";
-import type { BaseStats, CombatStats, Resistances } from "../interfaces/character/CharacterClass.interface";
-import { roundCombatStatsForResponse } from "../utils/characterFormat";
+import type {
+  BaseStats,
+  CombatStats,
+  Resistances,
+} from "../interfaces/character/CharacterClass.interface";
 
 const DBG = process.env.DEBUG_ALLOCATION === "1";
+const UI_DAMAGE_SPREAD_PCT = 25;  // ±25% (antes 0.25 = ±25%)
 
-/** Parámetro visual para el rango de daño mostrado en UI */
-const UI_DAMAGE_SPREAD = 0.2; // ±20%
+/* ───────── tipos DTO locales (solo lo que enviamos) ───────── */
 
-/** DTOs minimalistas y alineados al diseño nuevo */
 type SubclassDTO = {
   id: string;
   name: string;
@@ -26,52 +28,39 @@ type SubclassDTO = {
 type ClassMetaDTO = {
   id: string;
   name: string;
-  description?: string; // ✅ añadido para UI
+  description?: string;
   iconName: string;
   imageMainClassUrl: string;
-
-  // info de armas para la UI (bono 10% si es primaria, lo aplica el motor)
   primaryWeapons: string[];
   secondaryWeapons: string[];
   defaultWeapon: string;
   allowedWeapons: string[];
-
   passiveDefaultSkill: any | null;
-  passiveDefault?: any | null; // ✅ alias opcional por compatibilidad
+  passiveDefault?: any | null;
   ultimateSkill: any | null;
-
   subclasses: SubclassDTO[];
 };
 
 type CharacterResponseDTO = {
   id: string;
-  userId: string; // ✅ el frontend lo espera como string
+  userId: string;
   username: string;
-
   class: ClassMetaDTO;
   selectedSubclass: SubclassDTO | null;
-
   level: number;
   experience: number;
-
-  stats: BaseStats; // incluye fate
+  stats: BaseStats;          // ← canonical, solo constitution
   resistances: Resistances;
-  combatStats: CombatStats; // ya redondeado para UI
-
-  /** Campos de apoyo para UI */
+  combatStats: CombatStats;
   primaryPowerKey: "attackPower" | "magicPower";
   primaryPower: number;
   uiDamageMin: number;
   uiDamageMax: number;
-
   equipment: Record<string, string | null>;
   inventory: string[];
-
   createdAt: Date;
   updatedAt: Date;
-
   availablePoints?: number;
-
   stamina: {
     stamina: number;
     staminaMax: number;
@@ -81,79 +70,78 @@ type CharacterResponseDTO = {
   };
 };
 
-/** helpers */
+/* ───────── helpers ───────── */
+
 const toId = (x: any) => (x?._id ?? x?.id)?.toString() || "";
+
+const toInt = (v: any, d = 0) => {
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) ? n : d;
+};
 
 const mapSubclass = (s: any): SubclassDTO => ({
   id: toId(s),
-  name: String(s.name ?? ""),
-  iconName: String(s.iconName ?? ""),
-  imageSubclassUrl: s.imageSubclassUrl,
-  slug: s.slug ?? null,
+  name: String(s?.name ?? ""),
+  iconName: String(s?.iconName ?? ""),
+  imageSubclassUrl: s?.imageSubclassUrl,
+  slug: s?.slug ?? null,
 });
 
 const mapClassMeta = (raw: any): ClassMetaDTO => ({
   id: toId(raw),
-  name: String(raw.name ?? ""),
-  description: String(raw.description ?? ""),
-  iconName: String(raw.iconName ?? ""),
-  imageMainClassUrl: String(raw.imageMainClassUrl ?? ""),
-
-  primaryWeapons: Array.isArray(raw.primaryWeapons) ? raw.primaryWeapons : [],
-  secondaryWeapons: Array.isArray(raw.secondaryWeapons) ? raw.secondaryWeapons : [],
-  defaultWeapon: String(raw.defaultWeapon ?? ""),
-  allowedWeapons: Array.isArray(raw.allowedWeapons) ? raw.allowedWeapons : [],
-
-  passiveDefaultSkill: raw.passiveDefaultSkill ?? null,
-  passiveDefault: raw.passiveDefault ?? raw.passiveDefaultSkill ?? null, // ✅ alias
-  ultimateSkill: raw.ultimateSkill ?? null,
-
-  subclasses: Array.isArray(raw.subclasses) ? raw.subclasses.map(mapSubclass) : [],
+  name: String(raw?.name ?? ""),
+  description: String(raw?.description ?? ""),
+  iconName: String(raw?.iconName ?? ""),
+  imageMainClassUrl: String(raw?.imageMainClassUrl ?? ""),
+  primaryWeapons: Array.isArray(raw?.primaryWeapons) ? raw.primaryWeapons : [],
+  secondaryWeapons: Array.isArray(raw?.secondaryWeapons) ? raw.secondaryWeapons : [],
+  defaultWeapon: String(raw?.defaultWeapon ?? ""),
+  allowedWeapons: Array.isArray(raw?.allowedWeapons) ? raw.allowedWeapons : [],
+  passiveDefaultSkill: raw?.passiveDefaultSkill ?? null,
+  passiveDefault: raw?.passiveDefault ?? raw?.passiveDefaultSkill ?? null,
+  ultimateSkill: raw?.ultimateSkill ?? null,
+  subclasses: Array.isArray(raw?.subclasses) ? raw.subclasses.map(mapSubclass) : [],
 });
 
-/** Normaliza a BaseStats (incluye fate) */
+/** Canoniza BaseStats con SOLO constitution. */
 function coerceBaseStats(src: any): BaseStats {
   return {
-    strength: Number(src?.strength ?? 0),
-    dexterity: Number(src?.dexterity ?? 0),
-    intelligence: Number(src?.intelligence ?? 0),
-    vitality: Number(src?.vitality ?? 0),
-    physicalDefense: Number(src?.physicalDefense ?? 0),
-    magicalDefense: Number(src?.magicalDefense ?? 0),
-    luck: Number(src?.luck ?? 0),
-    endurance: Number(src?.endurance ?? 0),
-    fate: Number(src?.fate ?? 0),
+    strength: toInt(src?.strength, 0),
+    dexterity: toInt(src?.dexterity, 0),
+    intelligence: toInt(src?.intelligence, 0),
+    constitution: toInt(src?.constitution, 0),
+    physicalDefense: toInt(src?.physicalDefense, 0),
+    magicalDefense: toInt(src?.magicalDefense, 0),
+    luck: toInt(src?.luck, 0),
+    endurance: toInt(src?.endurance, 0),
+    fate: toInt(src?.fate, 0),
   };
 }
 
-/** Detecta si la clase es de corte mágico por nombre (fallback) */
-function isMagicClassName(name: string | undefined | null) {
+function isMagicClassName(name?: string | null) {
   const n = (name ?? "").toLowerCase();
   return /necromancer|exorcist|mage|wizard|sorcer/.test(n);
 }
 
-/** Resuelve clave de poder primario y valor a partir de combatStats y clase */
-function resolvePrimaryPower(classMeta: ClassMetaDTO, cs: Partial<CombatStats> | null | undefined): { key: "attackPower" | "magicPower"; value: number } {
-  const ap = Math.round(Number(cs?.attackPower ?? 0));
-  const mp = Math.round(Number(cs?.magicPower ?? 0));
-
-  if (isMagicClassName(classMeta?.name)) {
-    return { key: "magicPower", value: mp };
-  }
-  // Si la clase no es claramente mágica, tomar el mayor
-  if (mp > ap) return { key: "magicPower", value: mp };
-  return { key: "attackPower", value: ap };
+function resolvePrimaryPower(
+  classMeta: ClassMetaDTO,
+  cs: Partial<CombatStats> | null | undefined
+): { key: "attackPower" | "magicPower"; value: number } {
+  const ap = toInt(cs?.attackPower, 0);
+  const mp = toInt(cs?.magicPower, 0);
+  if (isMagicClassName(classMeta?.name)) return { key: "magicPower", value: mp };
+  return mp > ap ? { key: "magicPower", value: mp } : { key: "attackPower", value: ap };
 }
 
-/** Calcula rango visual de daño en enteros (UI only) */
-function computeUiDamageRange(primary: number): { min: number; max: number } {
-  const p = Math.max(0, Math.round(Number(primary)));
-  const min = Math.max(1, Math.floor(p * (1 - UI_DAMAGE_SPREAD)));
-  const max = Math.max(min, Math.ceil(p * (1 + UI_DAMAGE_SPREAD)));
+function computeUiDamageRange(primary: number) {
+  const p = Math.max(0, toInt(primary, 0));
+  const min = Math.max(1, Math.floor((p * (100 - UI_DAMAGE_SPREAD_PCT)) / 100));
+  const max = Math.max(min, Math.ceil((p * (100 + UI_DAMAGE_SPREAD_PCT)) / 100));
   return { min, max };
 }
 
-/** GET /character/me */
+/* ───────── handler ───────── */
+
 export const getMyCharacter: RequestHandler = async (req, res) => {
   try {
     const userId = req.user?.id;
@@ -161,31 +149,19 @@ export const getMyCharacter: RequestHandler = async (req, res) => {
       return res.status(401).json({ message: "No autenticado" });
     }
 
-    // Personaje + username del User
-    const characterDoc = await Character.findOne({ userId }).populate({ path: "userId", select: "username" }).lean();
+    const characterDoc = await Character.findOne({ userId })
+      .populate({ path: "userId", select: "username" })
+      .lean();
 
     if (!characterDoc) {
       return res.status(404).json({ message: "Personaje no encontrado" });
     }
 
-    // Clase con metadatos nuevos
     const baseClassDoc = await CharacterClass.findById(characterDoc.classId)
       .select(
-        [
-          "name",
-          "description",
-          "iconName",
-          "imageMainClassUrl",
-          "primaryWeapons",
-          "secondaryWeapons",
-          "defaultWeapon",
-          "allowedWeapons",
-          "passiveDefaultSkill",
-          "passiveDefault",
-          "ultimateSkill",
-          "subclasses",
-          "baseStats",
-        ].join(" ")
+        "name description iconName imageMainClassUrl " +
+          "primaryWeapons secondaryWeapons defaultWeapon allowedWeapons " +
+          "passiveDefaultSkill passiveDefault ultimateSkill subclasses baseStats"
       )
       .lean();
 
@@ -195,51 +171,63 @@ export const getMyCharacter: RequestHandler = async (req, res) => {
 
     const classMeta = mapClassMeta(baseClassDoc);
 
-    // Subclase seleccionada (si existe)
+    // Subclase seleccionada (si hay)
     const subclassIdStr = characterDoc.subclassId ? String(characterDoc.subclassId) : null;
-    const selectedSubclass = subclassIdStr && Array.isArray(classMeta.subclasses) ? classMeta.subclasses.find((s) => s.id === subclassIdStr) ?? null : null;
+    const selectedSubclass =
+      subclassIdStr && Array.isArray(classMeta.subclasses)
+        ? classMeta.subclasses.find((s) => s.id === subclassIdStr) ?? null
+        : null;
 
-    // Puntos disponibles respecto a base de la clase (ahora con fate)
-    const statsBS: BaseStats = coerceBaseStats(characterDoc.stats);
-    const baseBS: BaseStats = coerceBaseStats(baseClassDoc.baseStats);
-    const availablePoints = computeAvailablePoints(Number(characterDoc.level ?? 1), statsBS, baseBS);
+    // Canonicalizamos stats (SOLO constitution)
+    const statsBS = coerceBaseStats(characterDoc.stats);
+    const baseBS = coerceBaseStats(baseClassDoc.baseStats);
+
+    const availablePoints = computeAvailablePoints(
+      toInt(characterDoc.level, 1),
+      statsBS,
+      baseBS
+    );
     if (DBG) console.log("[/character/me] availablePoints:", availablePoints);
 
-    // Combat stats “bonitos” para UI
-    const combatStatsRounded = roundCombatStatsForResponse((characterDoc.combatStats as CombatStats) || ({} as any));
+    // Combat: cerrar unidades para respuesta
+    const combatStatsRounded = (characterDoc as any).combatStats || {};
 
-    // username desde el populate (o desde req.user)
-    const usernameFromPopulate = (characterDoc as any)?.userId?.username ?? (req.user as any)?.username ?? "—";
+    const usernameFromPopulate =
+      (characterDoc as any)?.userId?.username ??
+      (req.user as any)?.username ??
+      "—";
 
-    // Stamina (lazy regen)
     const staminaSnap = await getStaminaByUserId(userId);
 
-    // Poder primario y rango de daño para UI (enteros)
-    const { key: primaryPowerKey, value: primaryPower } = resolvePrimaryPower(classMeta, combatStatsRounded);
-    const { min: uiDamageMin, max: uiDamageMax } = computeUiDamageRange(primaryPower);
+    // Poder primario y daño UI
+    const { key: primaryPowerKey, value: primaryPower } = resolvePrimaryPower(
+      classMeta,
+      combatStatsRounded
+    );
+    const { min: uiDamageMin, max: uiDamageMax } =
+      computeUiDamageRange(primaryPower);
 
     const payload: CharacterResponseDTO = {
       id: String(characterDoc._id),
-      userId: String(characterDoc.userId), // ✅ como string
+      userId: String(characterDoc.userId),
       username: usernameFromPopulate,
-
       class: classMeta,
       selectedSubclass,
+      level: toInt(characterDoc.level, 1),
+      experience: toInt(characterDoc.experience, 0),
 
-      level: Number(characterDoc.level ?? 1),
-      experience: Number(characterDoc.experience ?? 0),
+      // ✅ stats canónicos
+      stats: statsBS,
+      resistances: (characterDoc as any).resistances as Resistances,
 
-      stats: characterDoc.stats as BaseStats,
-      resistances: characterDoc.resistances as Resistances,
       combatStats: combatStatsRounded,
-
       primaryPowerKey,
       primaryPower,
       uiDamageMin,
       uiDamageMax,
 
-      equipment: characterDoc.equipment,
-      inventory: characterDoc.inventory,
+      equipment: (characterDoc as any).equipment,
+      inventory: (characterDoc as any).inventory,
 
       createdAt: characterDoc.createdAt as Date,
       updatedAt: characterDoc.updatedAt as Date,

@@ -1,4 +1,3 @@
-// src/controllers/arena.controller.ts
 /* eslint-disable no-console */
 
 import { Request, Response } from "express";
@@ -6,15 +5,22 @@ import { Types } from "mongoose";
 import { Character } from "../models/Character";
 import { CharacterClass } from "../models/CharacterClass";
 import { Match } from "../models/Match";
-import { buildCharacterSnapshot } from "../battleSystem/core/CharacterSnapshot";
+import { buildCharacterSnapshot } from "../battleSystem/snapshots/CharacterSnapshot";
 
-// 👇 importa helpers de arma para calcular min/max
+// Armas (para calcular min/max del arma con bonus si es primaria)
 import {
   ensureWeaponOrDefault,
   isPrimaryWeapon,
   PRIMARY_WEAPON_BONUS_MULT,
   type WeaponData,
 } from "../battleSystem/core/Weapon";
+
+// ✅ Stamina (único gasto aquí)
+import { spendStamina } from "../services/stamina.service";
+
+const PVP_STAMINA_COST: number = Number.isFinite(Number(process.env.PVP_STAMINA_COST))
+  ? Number(process.env.PVP_STAMINA_COST)
+  : 10;
 
 const toId = (x: any) => (x?._id ?? x?.id)?.toString() || "";
 const asObjectId = (v: any) => {
@@ -31,7 +37,7 @@ type ClassMetaSnap = {
   defaultWeapon?: string | null;
 };
 
-/* ----------------------------- utils de skill/arma ----------------------------- */
+/* ----------------------------- helpers ----------------------------- */
 const asNum = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const pick = <T = any>(...vals: any[]): T | undefined =>
   vals.find((vv) => vv !== undefined && vv !== null);
@@ -41,14 +47,12 @@ const slimSkill = (s: any) =>
     ? {
         name: String(s.name),
         description:
-          (s?.description ??
-            s?.shortDescEn ??
-            s?.longDescEn ??
-            undefined) && String(s?.description ?? s?.shortDescEn ?? s?.longDescEn),
+          (s?.description ?? s?.shortDescEn ?? s?.longDescEn ?? undefined) &&
+          String(s?.description ?? s?.shortDescEn ?? s?.longDescEn),
       }
     : null;
 
-/** Intenta deducir el arma principal desde múltiples campos; si no hay, usa defaultWeapon de la clase o “fists”. */
+/** Deducción de arma + bonus por arma primaria. */
 function computeWeaponRange(
   rawChar: any,
   classMeta?: { defaultWeapon?: string | null; primaryWeapons?: string[] | null }
@@ -86,7 +90,7 @@ function extractCombatCompact(src: any) {
     blockChance: asNum(pick(c.blockChance, c.block)),
     criticalChance: asNum(pick(c.criticalChance, c.critChance, c.crit)),
     damageReduction: asNum(pick(c.damageReduction, c.dr)),
-    // min/max vendrán overrideados desde computeWeaponRange
+    // min/max por defecto (pueden ser overrideados con rango de arma)
     minDamage: asNum(pick(c.minDamage, c.damageMin, c.min)),
     maxDamage: asNum(pick(c.maxDamage, c.damageMax, c.max)),
   };
@@ -106,13 +110,17 @@ function buildSideMeta(rawDoc: any, classMeta: any, snapshot: any) {
     level: Number(rawDoc?.level ?? 1),
     className: classMeta?.name ?? "—",
     avatarUrl: rawDoc?.avatarUrl ?? null,
-    passiveDefaultSkill: slimSkill(classMeta?.passiveDefaultSkill ?? rawDoc?.passiveDefaultSkill),
-    ultimateSkill: slimSkill(classMeta?.ultimateSkill ?? rawDoc?.ultimateSkill),
+    passiveDefaultSkill: slimSkill(
+      classMeta?.passiveDefaultSkill ?? rawDoc?.passiveDefaultSkill
+    ),
+    ultimateSkill: slimSkill(
+      classMeta?.ultimateSkill ?? rawDoc?.ultimateSkill
+    ),
     combatStats: { ...baseCombat, ...range },
   };
 }
 
-/* --------------------------------- GET /arena/opponents --------------------------------- */
+/* ============================== GET /arena/opponents ============================== */
 export async function getArenaOpponentsController(req: Request, res: Response) {
   try {
     const meId = req.user?.id;
@@ -146,11 +154,11 @@ export async function getArenaOpponentsController(req: Request, res: Response) {
       .populate({ path: "userId", select: "username" })
       .lean();
 
-    // Traemos meta mínima de clase para nombre + defaultWeapon/primaryWeapons (cálculo de rango de daño)
+    // Meta mínima de clase
     const classIds = Array.from(
       new Set((rivals ?? []).map((r: any) => toId(r.classId)).filter(Boolean))
     );
-    let classMetaById = new Map<string, ClassMetaSnap>();
+    const classMetaById = new Map<string, ClassMetaSnap>();
     if (classIds.length) {
       const classes = await CharacterClass.find({ _id: { $in: classIds } })
         .select("name primaryWeapons defaultWeapon")
@@ -170,7 +178,6 @@ export async function getArenaOpponentsController(req: Request, res: Response) {
       const meta = classMetaById.get(toId(r.classId));
       const className = meta?.name ?? "—";
 
-      // ✅ min/max desde arma (+bonus primaria)
       const range = computeWeaponRange(r, {
         defaultWeapon: meta?.defaultWeapon ?? undefined,
         primaryWeapons: meta?.primaryWeapons ?? undefined,
@@ -193,7 +200,7 @@ export async function getArenaOpponentsController(req: Request, res: Response) {
         stats: r?.stats ?? {},
         combatStats: {
           ...(combat ?? {}),
-          ...range, // 👈 aquí va el Damage min/max visible para tu front
+          ...range, // Damage min/max visible para el front
         },
         avatarUrl: r?.avatarUrl ?? null,
       };
@@ -206,7 +213,7 @@ export async function getArenaOpponentsController(req: Request, res: Response) {
   }
 }
 
-/* -------------------------------- POST /arena/challenges -------------------------------- */
+/* ============================== POST /arena/challenges ============================== */
 export async function postArenaChallengeController(
   req: Request,
   res: Response
@@ -234,6 +241,76 @@ export async function postArenaChallengeController(
       return res.status(400).json({ message: "Ids inválidos" });
     }
 
+    /* ---------- Anti doble click (reutiliza pending reciente sin cobrar) ---------- */
+    const reuseWindowMs = 5000;
+    const since = new Date(Date.now() - reuseWindowMs);
+    const recentPending = await Match.findOne({
+      attackerUserId: meOID,
+      status: "pending",
+      createdAt: { $gte: since },
+    }).lean();
+
+    if (recentPending) {
+      const [attackerDoc, defenderDoc] = await Promise.all([
+        Character.findById(recentPending.attackerCharacterId).populate({
+          path: "userId",
+          select: "username",
+        }),
+        Character.findById(recentPending.defenderCharacterId).populate({
+          path: "userId",
+          select: "username",
+        }),
+      ]);
+
+      const [attClass, defClass] = await Promise.all([
+        attackerDoc?.classId
+          ? CharacterClass.findById(attackerDoc.classId)
+              .select(
+                "name passiveDefaultSkill ultimateSkill primaryWeapons defaultWeapon"
+              )
+              .lean<ClassMetaSnap>()
+          : null,
+        defenderDoc?.classId
+          ? CharacterClass.findById(defenderDoc.classId)
+              .select(
+                "name passiveDefaultSkill ultimateSkill primaryWeapons defaultWeapon"
+              )
+              .lean<ClassMetaSnap>()
+          : null,
+      ]);
+
+      return res.status(200).json({
+        matchId: String(recentPending._id),
+        status: recentPending.status,
+        seed: (recentPending as any).seed,
+        attacker: buildSideMeta(
+          attackerDoc?.toObject(),
+          attClass,
+          (recentPending as any).attackerSnapshot
+        ),
+        defender: buildSideMeta(
+          defenderDoc?.toObject(),
+          defClass,
+          (recentPending as any).defenderSnapshot
+        ),
+        reused: true,
+      });
+    }
+
+    /* ------------------------ ÚNICO gasto de stamina (server) ----------------------- */
+    const spend = await spendStamina(String(meOID), PVP_STAMINA_COST);
+    if (!spend.ok) {
+      if (spend.reason === "insufficient") {
+        return res
+          .status(400)
+          .json({
+            message: `Stamina insuficiente. Necesitas ${PVP_STAMINA_COST}.`,
+          });
+      }
+      return res.status(404).json({ message: "Personaje no encontrado" });
+    }
+
+    /* ------------------------------- Carga de docs ------------------------------- */
     const [attackerDoc, defenderDoc] = await Promise.all([
       Character.findOne({ userId: meOID }),
       Character.findOne({ userId: oppOID }),
@@ -244,7 +321,6 @@ export async function postArenaChallengeController(
     if (!defenderDoc)
       return res.status(404).json({ message: "Oponente no encontrado" });
 
-    // Metadatos de clase (para pasivas/ult y rango min/max por arma)
     const [attClass, defClass] = await Promise.all([
       attackerDoc.classId
         ? CharacterClass.findById(attackerDoc.classId)
@@ -284,7 +360,7 @@ export async function postArenaChallengeController(
       };
     }
 
-    // Snapshots “congelados”
+    /* --------------------------- Snapshots y creación --------------------------- */
     const attackerSnapshot = buildCharacterSnapshot(attackerRaw);
     const defenderSnapshot = buildCharacterSnapshot(defenderRaw);
 
@@ -296,17 +372,14 @@ export async function postArenaChallengeController(
       attackerCharacterId: attackerDoc._id,
       defenderUserId: defenderDoc.userId,
       defenderCharacterId: defenderDoc._id,
-
       attackerSnapshot,
       defenderSnapshot,
       seed,
-
       mode: "pvp",
       status: "pending",
       runnerVersion: 2,
     });
 
-    // ✅ Meta compacta para front (skills + rango arma)
     const attacker = buildSideMeta(attackerRaw, attClass, attackerSnapshot);
     const defender = buildSideMeta(defenderRaw, defClass, defenderSnapshot);
 

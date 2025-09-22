@@ -18,7 +18,7 @@ export type Rarity = "common" | "uncommon" | "rare" | "epic" | "legendary";
 export type BP = number;
 
 // Stats válidos (sin agility ni wisdom)
-export type StatKey = "strength" | "dexterity" | "intelligence" | "vitality" | "physicalDefense" | "magicalDefense" | "luck" | "endurance";
+export type StatKey = "strength" | "dexterity" | "intelligence" | "constitution" | "physicalDefense" | "magicalDefense" | "luck" | "endurance";
 
 export type CombatKey =
   | "maxHP"

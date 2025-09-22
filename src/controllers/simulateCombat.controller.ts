@@ -1,9 +1,8 @@
 /* eslint-disable no-console */
 // Simulación y resolución de combates PvP (nuevo sistema)
 // src/controllers/simulateCombat.controller.ts
-// - No requiere characterId (usa el matchId que referencia los snapshots)
+// - Resolve YA NO cobra stamina (el cobro ocurre en /arena/challenges)
 // - Preview público (cualquiera puede ver la simulación de un match)
-// - Resolve autenticado (cobra stamina al usuario atacante)
 // - Guarda log y snapshots del combate en el match
 // - Actualiza stats de personajes y usuarios
 // - No guarda historial de combate (CombatResult) como en el sistema viejo
@@ -15,11 +14,7 @@ import { Match } from "../models/Match";
 import { Character } from "../models/Character";
 import { runPvp } from "../battleSystem";
 import { computeProgression } from "../services/progression.service";
-import { spendStamina, getStaminaByUserId } from "../services/stamina.service";
 import { TimelineEvent } from "../battleSystem/pvp/pvpRunner";
-
-/** Costo de stamina por pelea PvP (se cobra al resolver) */
-const STAMINA_COST_PVP = 10;
 
 /** Versión de runner (Fate/procs/ultimate) */
 const RUNNER_VERSION = 2;
@@ -51,11 +46,23 @@ function computePvpRewards(outcome: "win" | "lose" | "draw") {
 }
 
 /** Compatibilidad: campos de puntos según esquema viejo */
-const POINTS_FIELDS = ["availablePoints", "statPoints", "unallocatedPoints", "pointsAvailable", "attributePoints"] as const;
+const POINTS_FIELDS = [
+  "availablePoints",
+  "statPoints",
+  "unallocatedPoints",
+  "pointsAvailable",
+  "attributePoints",
+] as const;
 const ATTR_POINTS_PER_LEVEL = 5;
 
-async function applyRewardsToCharacter(charId: any | undefined, userId: any | undefined, rw: { xp?: number; gold?: number; honorDelta?: number }) {
-  let doc = (charId && (await Character.findById(charId))) || (userId && (await Character.findOne({ userId })));
+async function applyRewardsToCharacter(
+  charId: any | undefined,
+  userId: any | undefined,
+  rw: { xp?: number; gold?: number; honorDelta?: number }
+) {
+  let doc =
+    (charId && (await Character.findById(charId))) ||
+    (userId && (await Character.findOne({ userId })));
 
   if (!doc) return { updated: false };
 
@@ -84,7 +91,8 @@ async function applyRewardsToCharacter(charId: any | undefined, userId: any | un
     const gained = (newLevel - prevLevel) * ATTR_POINTS_PER_LEVEL;
     for (const f of POINTS_FIELDS) {
       if (Object.prototype.hasOwnProperty.call(doc, f)) {
-        (doc as any)[f] = Math.max(0, Math.floor(Number((doc as any)[f] ?? 0))) + gained;
+        (doc as any)[f] =
+          Math.max(0, Math.floor(Number((doc as any)[f] ?? 0))) + gained;
         break;
       }
     }
@@ -125,7 +133,8 @@ function normalizeTimeline(items: any[]) {
       };
     }
 
-    const event: "hit" | "crit" | "block" | "miss" = (ev as any) ?? (Number(it.damage ?? 0) > 0 ? "hit" : "miss");
+    const event: "hit" | "crit" | "block" | "miss" =
+      (ev as any) ?? (Number(it.damage ?? 0) > 0 ? "hit" : "miss");
 
     return {
       turn,
@@ -209,7 +218,8 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
 export const resolveCombatController: RequestHandler = async (req, res) => {
   try {
     const callerUserId = req.user?.id;
-    if (!callerUserId) return res.status(401).json({ ok: false, message: "No autenticado" });
+    if (!callerUserId)
+      return res.status(401).json({ ok: false, message: "No autenticado" });
 
     const { matchId } = req.body as { matchId?: string };
     if (!matchId || !Types.ObjectId.isValid(matchId)) {
@@ -221,9 +231,23 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
 
     const mAny = match as any;
 
+    // Solo el atacante puede resolver su match
+    if (String(mAny.attackerUserId) !== String(callerUserId)) {
+      return res.status(403).json({ ok: false, message: "No autorizado" });
+    }
+
+    // Idempotente: si ya está resuelto devolvemos lo guardado
     if (mAny.status === "resolved") {
-      const storedOutcome = (mAny.outcome ?? "draw") as "attacker" | "defender" | "draw";
-      const outcomeForAttacker: "win" | "lose" | "draw" = storedOutcome === "attacker" ? "win" : storedOutcome === "defender" ? "lose" : "draw";
+      const storedOutcome = (mAny.outcome ?? "draw") as
+        | "attacker"
+        | "defender"
+        | "draw";
+      const outcomeForAttacker: "win" | "lose" | "draw" =
+        storedOutcome === "attacker"
+          ? "win"
+          : storedOutcome === "defender"
+          ? "lose"
+          : "draw";
 
       return res.json({
         ok: true,
@@ -238,18 +262,7 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
       });
     }
 
-    // stamina
-    const spent = await spendStamina(callerUserId, STAMINA_COST_PVP);
-    if (!spent.ok) {
-      const snap = await getStaminaByUserId(callerUserId).catch(() => null);
-      return res.status(400).json({
-        ok: false,
-        message: "Stamina insuficiente",
-        required: STAMINA_COST_PVP,
-        stamina: snap || undefined,
-        reason: (spent as any).reason,
-      });
-    }
+    // ⛔️ Ya NO se descuenta stamina aquí. El gasto se hace en /arena/challenges.
 
     const { outcome, timeline, log, snapshots } = runPvp({
       attackerSnapshot: mAny.attackerSnapshot,
@@ -261,10 +274,15 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
     const timelineNorm = normalizeTimeline(timeline);
     const rw = computePvpRewards(outcome);
 
+    // Aplicar recompensas a ambos personajes
     const att = mAny.attackerSnapshot || {};
     const def = mAny.defenderSnapshot || {};
-    await Promise.all([applyRewardsToCharacter(att.characterId, att.userId, rw.attacker), applyRewardsToCharacter(def.characterId, def.userId, rw.defender)]);
+    await Promise.all([
+      applyRewardsToCharacter(att.characterId, att.userId, rw.attacker),
+      applyRewardsToCharacter(def.characterId, def.userId, rw.defender),
+    ]);
 
+    // Persistir resultado en el match
     mAny.status = "resolved";
     mAny.outcome = mapOutcomeForMatch(outcome);
     mAny.winner = outcome === "win" ? "player" : outcome === "lose" ? "enemy" : "draw";
@@ -289,7 +307,6 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
       snapshots,
       log,
       turns: timelineNorm.length,
-      staminaAfter: spent.after,
       runnerVersion: RUNNER_VERSION,
     });
   } catch (err: any) {

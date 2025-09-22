@@ -1,21 +1,26 @@
-// src/battleSystem/factories/buildCombatEntities.ts
 import { Types } from "mongoose";
 import { Character } from "../../models/Character";
 import { Enemy } from "../../models/Enemy";
 import { PlayerCharacter } from "../entities/PlayerCharacter";
 import { EnemyBot } from "../entities/EnemyBot";
-import type { CharacterForBattleLean, EnemyForBattleLean, Stats, Resistances, CombatStats } from "../../types/lean";
+import type {
+  CharacterForBattleLean,
+  EnemyForBattleLean,
+  Stats,
+  Resistances,
+  CombatStats,
+} from "../../types/lean";
 
 const DEF_STATS: Stats = {
   strength: 0,
   dexterity: 0,
   intelligence: 0,
-  vitality: 0,
+  constitution: 0,
   physicalDefense: 0,
   magicalDefense: 0,
   luck: 0,
   endurance: 0,
-  fate: 0, // ✅ faltaba este campo requerido por Stats
+  fate: 0,
 };
 
 const DEF_RES: Resistances = {
@@ -67,10 +72,16 @@ export async function buildPlayerCharacter(id?: string) {
 
   if (!id) {
     // modo DEV/seed: toma el primero que haya
-    c = await Character.findOne().select("_id level stats resistances combatStats name username").lean<CharacterForBattleLean>().exec();
+    c = await Character.findOne()
+      .select("_id level stats resistances combatStats name username")
+      .lean<CharacterForBattleLean>()
+      .exec();
   } else if (Types.ObjectId.isValid(id)) {
     // 1) intentar por characterId
-    c = await Character.findById(id).select("_id level stats resistances combatStats name username").lean<CharacterForBattleLean>().exec();
+    c = await Character.findById(id)
+      .select("_id level stats resistances combatStats name username")
+      .lean<CharacterForBattleLean>()
+      .exec();
 
     // 2) si no hay, intentar por userId == id
     if (!c) {
@@ -80,12 +91,14 @@ export async function buildPlayerCharacter(id?: string) {
         .exec();
     }
   } else {
-    throw new Error("buildPlayerCharacter: id debe ser un ObjectId válido (characterId o userId).");
+    throw new Error(
+      "buildPlayerCharacter: id debe ser un ObjectId válido (characterId o userId)."
+    );
   }
 
   if (!c) throw new Error("Character not found");
 
-  const name = c.name ?? c.username ?? "Jugador";
+  const name = (c as any).name ?? (c as any).username ?? "Jugador";
   const level = Number(c.level ?? 1);
   const stats = mergeDefaults(c.stats, DEF_STATS);
   const res = mergeDefaults(c.resistances, DEF_RES);
@@ -102,9 +115,15 @@ export async function buildEnemyById(enemyId?: string) {
   let e: EnemyForBattleLean | null = null;
 
   if (!enemyId) {
-    e = await Enemy.findOne().select("_id name level stats resistances combatStats").lean<EnemyForBattleLean>().exec();
+    e = await Enemy.findOne()
+      .select("_id name level stats resistances combatStats")
+      .lean<EnemyForBattleLean>()
+      .exec();
   } else if (Types.ObjectId.isValid(enemyId)) {
-    e = await Enemy.findById(enemyId).select("_id name level stats resistances combatStats").lean<EnemyForBattleLean>().exec();
+    e = await Enemy.findById(enemyId)
+      .select("_id name level stats resistances combatStats")
+      .lean<EnemyForBattleLean>()
+      .exec();
   } else {
     throw new Error("buildEnemyById: enemyId debe ser un ObjectId válido.");
   }

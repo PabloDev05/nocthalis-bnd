@@ -1,7 +1,15 @@
 // src/battleSystem/ui/animationScheduler.ts
 import type { TimelineEntry } from "../pvp/pvpRunner"; // tipos del runner
 
-export type ScheduledEventType = "attack_windup" | "impact_hit" | "impact_crit" | "impact_block" | "impact_miss" | "passive_proc" | "ultimate_cast";
+export type ScheduledEventType =
+  | "attack_windup"
+  | "impact_hit"
+  | "impact_crit"
+  | "impact_block"
+  | "impact_miss"
+  | "impact_dot"       // ← NUEVO: DoT ticks
+  | "passive_proc"
+  | "ultimate_cast";
 
 export type ActorSide = "attacker" | "defender";
 
@@ -28,6 +36,7 @@ export interface ScheduleOptions {
   extraCritMs: number; // 200 (se suma a impact)
   extraBlockMs: number; // 180 (se suma a impact)
   extraMissMs: number; // 150 (se suma a impact)
+  dotTickMs: number; // 220 (duración del impacto de DoT)
 }
 
 export const DEFAULTS: ScheduleOptions = {
@@ -40,6 +49,7 @@ export const DEFAULTS: ScheduleOptions = {
   extraCritMs: 200,
   extraBlockMs: 180,
   extraMissMs: 150,
+  dotTickMs: 220, // ← NUEVO
 };
 
 function makeId(type: ScheduledEventType, idx: number, turn: number) {
@@ -81,7 +91,12 @@ export function buildAnimationSchedule(
   let turnStart = 0;
   let perTurnIndex = 0;
 
-  const schedule = (type: ScheduledEventType, actor: ActorSide, dur: number, payload?: Partial<TimelineEntry> & { source?: ActorSide }) => {
+  const schedule = (
+    type: ScheduledEventType,
+    actor: ActorSide,
+    dur: number,
+    payload?: Partial<TimelineEntry> & { source?: ActorSide }
+  ) => {
     const id = makeId(type, perTurnIndex++, Number(payload?.turn ?? lastTurn));
     const startMs = tCursor;
     const endMs = startMs + Math.max(0, dur);
@@ -106,6 +121,19 @@ export function buildAnimationSchedule(
 
     const actor: ActorSide = readActor(raw);
     const ev = readEvent(raw);
+
+    // 0) DoT tick — impacto sin windup
+    if (ev === "dot_tick") {
+      schedule("impact_dot", actor, cfg.dotTickMs, raw);
+      // pequeño gap para no pisar el siguiente evento del turno
+      tCursor += cfg.gapSmallMs;
+      // ¿cierre de turno?
+      if (!next || Number(next.turn ?? turn) !== turn) {
+        const minEnd = turnStart + cfg.minTurnMs;
+        if (tCursor < minEnd) tCursor = minEnd;
+      }
+      continue;
+    }
 
     // 1) Habilidades (secuenciadas, mini gaps)
     if (ev === "passive_proc") {

@@ -1,7 +1,8 @@
+// src/controllers/stamina.controller.ts
 import type { Request, Response } from "express";
-import { getStaminaByUserId, spendStamina, setStamina } from "../services/stamina.service";
+import { getStaminaByUserId, spendStamina, setStamina, spendForAction } from "../services/stamina.service";
 
-/** GET /stamina  → snapshot actualizado (con regen perezosa) */
+/** GET /stamina */
 export async function getMyStamina(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
@@ -14,7 +15,7 @@ export async function getMyStamina(req: Request, res: Response) {
   }
 }
 
-/** POST /stamina/use  { amount } → intenta gastar stamina */
+/** POST /stamina/use { amount } */
 export async function useStamina(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
@@ -34,7 +35,27 @@ export async function useStamina(req: Request, res: Response) {
   }
 }
 
-/** POST /stamina/admin/set  { value }  → util de admin/debug */
+/** POST /stamina/use-action { action: "pvp" | "arena" | ... } */
+export async function useStaminaAction(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    const action = String((req.body || {}).action || "");
+    if (!userId) return res.status(401).json({ message: "No autenticado" });
+    if (!action) return res.status(400).json({ message: "action inválida" });
+
+    const out = await spendForAction(userId, action as any);
+    if (!out.ok) {
+      if (out.reason === "insufficient") return res.status(400).json({ ok: false, message: "Stamina insuficiente" });
+      return res.status(404).json({ ok: false, message: "Personaje no encontrado" });
+    }
+    return res.json({ ok: true, ...out.after });
+  } catch (err: any) {
+    console.error("[STAMINA][USE_ACTION] error:", err?.message || err);
+    return res.status(500).json({ message: "Error interno" });
+  }
+}
+
+/** POST /stamina/admin/set { value } */
 export async function adminSetStamina(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
@@ -42,7 +63,6 @@ export async function adminSetStamina(req: Request, res: Response) {
     const value = Math.floor(Number((req.body || {}).value ?? NaN));
     if (!Number.isFinite(value)) return res.status(400).json({ message: "value inválido" });
 
-    // Aquí podrías chequear rol admin si tenés roles en req.user
     const snap = await setStamina(userId, value);
     return res.json({ ok: true, ...snap });
   } catch (err: any) {

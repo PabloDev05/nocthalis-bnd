@@ -10,6 +10,17 @@ import { User } from "../models/User";
 
 const DBG = process.env.DEBUG_AUTH === "1";
 
+/* ───────────────── helpers ───────────────── */
+
+const i = (v: any, d = 0) => {
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) ? n : d;
+};
+const sanitizeBlock = <T extends Record<string, any>>(obj: T | undefined | null): T =>
+  Object.fromEntries(
+    Object.entries(obj || {}).map(([k, v]) => [k, i(v, 0)])
+  ) as T;
+
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -17,16 +28,17 @@ function escapeRegex(s: string) {
 /** Para login: incluimos hash y campos mínimos */
 const USER_LOGIN_PROJECTION = "+password +passwordHash email username classChosen characterClass";
 
+/* ───────────────── REGISTER ───────────────── */
+
 /**
  * POST /auth/register
  * body: { username, email, password, characterClass }
  *
  * Crea User + Character en una transacción.
- * - Character toma stats/resistances/combatStats desde la clase
- * - currentHP = maxHP
+ * - Character toma stats/resistances/combatStats desde la clase (ya con constitution/fate)
+ * - currentHP = combatStats.maxHP
  * - equipment.mainWeapon = defaultWeapon
- * - skillState inicial (ultimate lista; passiveBuff null)
- * - stamina inicial (100/100) y marca de tiempo para regen perezosa
+ * - stamina inicial 100/100
  */
 export const register = async (req: Request, res: Response) => {
   const { username, email, password, characterClass } = req.body as {
@@ -70,6 +82,7 @@ export const register = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Clase no encontrada" });
     }
 
+    // Hash
     const passwordHash = await bcrypt.hash(password, 10);
 
     // Crear usuario
@@ -78,7 +91,7 @@ export const register = async (req: Request, res: Response) => {
         {
           username: usernameNorm,
           email: emailNorm,
-          password: passwordHash, // campo actual (guardado hasheado)
+          password: passwordHash, // guardamos el hash en el campo actual
           classChosen: true,
           characterClass: clazz._id,
         },
@@ -86,13 +99,13 @@ export const register = async (req: Request, res: Response) => {
       { session }
     ).then((r) => r[0]);
 
-    // Bloques base clonados
-    const stats = { ...clazz.baseStats };
-    const resistances = { ...clazz.resistances };
-    const combatStats = { ...clazz.combatStats };
+    // Bloques base (enteros)
+    const stats        = sanitizeBlock(clazz.baseStats);       // ← con constitution/fate
+    const resistances  = sanitizeBlock(clazz.resistances);
+    const combatStats  = sanitizeBlock(clazz.combatStats);
 
-    // Vida inicial = tope
-    const currentHP = Math.max(1, Number(combatStats.maxHP ?? 1));
+    // Vida inicial = tope del bloque de combate
+    const currentHP = Math.max(1, i(combatStats.maxHP, 1));
 
     // Equipo inicial: arma por defecto de la clase
     const equipment = {
@@ -107,21 +120,15 @@ export const register = async (req: Request, res: Response) => {
       amulet: null,
     } as const;
 
-    // Estado de skills en runtime (no aplicamos buff aún)
-    const skillState = {
-      passiveBuff: null,
-      ultimate: clazz.ultimateSkill?.enabled ? { name: clazz.ultimateSkill.name, cooldownLeft: 0, silencedUntilTurn: null } : null,
-    };
-
-    // Stamina inicial (alineada con chooseClass)
+    // Stamina inicial
     const now = new Date();
     const STAMINA_DEFAULTS = {
       stamina: 100,
       staminaMax: 100,
-      staminaRegenPerHour: 10, // si luego prefieres “lleno en 24h exacto”, pon 0 y el servicio hace need/24h
+      staminaRegenPerHour: 10,
     } as const;
 
-    // Crear personaje
+    // Crear personaje (solo campos definidos en tu Schema actual)
     await Character.create(
       [
         {
@@ -137,27 +144,18 @@ export const register = async (req: Request, res: Response) => {
           resistances,
           combatStats,
 
-          // vida
-          maxHP: combatStats.maxHP,
+          // vida fuera de combate (para UI)
           currentHP,
 
           // equipo/inventario
           equipment,
           inventory: [],
 
-          // runtime skills
-          skillState,
-
-          // economía
-          gold: 0,
-          honor: 0,
-
           // stamina
           stamina: STAMINA_DEFAULTS.stamina,
           staminaMax: STAMINA_DEFAULTS.staminaMax,
           staminaRegenPerHour: STAMINA_DEFAULTS.staminaRegenPerHour,
-          staminaUpdatedAt: now, // para regen perezosa
-          // nextStaminaFullAt: se calculará en la primera lectura del servicio
+          staminaUpdatedAt: now,
 
           // subclase aún sin seleccionar
           subclassId: null,
@@ -168,7 +166,11 @@ export const register = async (req: Request, res: Response) => {
 
     await session.commitTransaction();
 
-    const token = jwt.sign({ id: newUser._id.toString(), email: emailNorm, username: usernameNorm }, secret, { expiresIn: "1h", algorithm: "HS256" });
+    const token = jwt.sign(
+      { id: newUser._id.toString(), email: emailNorm, username: usernameNorm },
+      secret,
+      { expiresIn: "1h", algorithm: "HS256" }
+    );
 
     return res.status(201).json({
       message: "Usuario registrado correctamente",
@@ -179,15 +181,13 @@ export const register = async (req: Request, res: Response) => {
         username: usernameNorm,
       },
       classChosen: true,
-      characterClass: clazz._id, // lo que usa tu front
-      characterClassId: clazz._id, // alias por si algo viejo lo lee
+      characterClass: clazz._id,      // lo que usa tu front
+      characterClassId: clazz._id,    // alias por si algo viejo lo lee
       characterClassName: clazz.name, // útil para UI
     });
   } catch (err: any) {
     if (DBG) console.error("Register error:", err);
-    try {
-      await session.abortTransaction();
-    } catch {}
+    try { await session.abortTransaction(); } catch {}
     if (err?.code === 11000) {
       return res.status(400).json({ message: "El usuario o el email ya están registrados" });
     }
@@ -196,6 +196,8 @@ export const register = async (req: Request, res: Response) => {
     session.endSession();
   }
 };
+
+/* ───────────────── LOGIN ───────────────── */
 
 /**
  * POST /auth/login

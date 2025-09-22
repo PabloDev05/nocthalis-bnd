@@ -7,6 +7,16 @@
 // - Crit chance y crit bonus mitigados por resistencias del defensor.
 // - Eventos: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast" | "dot_tick".
 
+// Si luego querés subir/bajar el impacto sin tocar el código, al instanciar el manager podés pasar:
+// new CombatManager(att, def, {
+//   globalDamageMult: 1.12,  // +12% global
+//   damageJitter: 0.25,      // más variación normal
+//   critMultiplierBase: 0.75, // +75% base
+//   critBonusAdd: 0.10,      // +10% extra
+//   critBonusMult: 1.10,     // +10% multiplicativo
+//   critJitter: 0.15,        // más variación en críticos
+// });
+
 import type { WeaponData } from "./Weapon";
 import { isPrimaryWeapon, PRIMARY_WEAPON_BONUS_MULT } from "./Weapon";
 import { StatusEngine, type Side } from "./StatusEngine";
@@ -15,10 +25,27 @@ import { STATUS_CATALOG } from "../constants/status";
 export interface ManagerOpts {
   rng?: () => number;
   seed?: number;
+
   maxRounds?: number;
+
+  /** Porción de daño bloqueado (0.5 = reduce 50%) */
   blockReduction?: number;
+
+  /** Bonus de crítico base si el atacante no trae `criticalDamageBonus` (0.6 = +60%). */
   critMultiplierBase?: number;
+
+  /** Variación del daño base (±j sobre 1.0). 0.22 ⇒ factor uniformemente en [0.78..1.22] */
   damageJitter?: number;
+
+  /** 🔧 Aumenta levemente TODO el daño antes de DEF (p.ej. 1.08 = +8%). */
+  globalDamageMult?: number;
+
+  /** 🔧 “Perillas” para potenciar críticos de forma controlada (antes de mitigación): */
+  critBonusAdd?: number;   // suma directa al bonus (0.05 = +5% extra)
+  critBonusMult?: number;  // factor multiplicativo del bonus (1.05 = +5%)
+
+  /** Variación extra SOLO para golpes críticos. 0.08 ⇒ [0.92..1.08] */
+  critJitter?: number;
 }
 
 const DEBUG_MAN = false;
@@ -242,6 +269,10 @@ export type CombatEvent =
           blockFactor: number;
           drFactor: number;
           ultimatePreMult?: number;
+          /** NUEVO: multiplicador global aplicado antes de DEF */
+          globalMult?: number;
+          /** NUEVO: jitter adicional de críticos (si hubo) */
+          critJitterFactor?: number;
         };
       };
     }
@@ -280,7 +311,9 @@ export class CombatManager {
   public enemy: CombatSide;
 
   private rng: () => number;
-  private opts: Required<Pick<ManagerOpts, "maxRounds" | "blockReduction" | "critMultiplierBase" | "damageJitter">> & ManagerOpts;
+  private opts: Required<
+    Pick<ManagerOpts, "maxRounds" | "blockReduction" | "critMultiplierBase" | "damageJitter" | "globalDamageMult" | "critBonusAdd" | "critBonusMult" | "critJitter">
+  > & ManagerOpts;
 
   private rounds = 0;
   private dbgCount = 0;
@@ -292,7 +325,18 @@ export class CombatManager {
     this.player = attackerLike as CombatSide;
     this.enemy = defenderLike as CombatSide;
 
-    const defaults = { maxRounds: 50, blockReduction: 0.5, critMultiplierBase: 0.5, damageJitter: 0.15 };
+    // Defaults afinados: más variación, críticos más “picantes”, y +8% daño global
+    const defaults = {
+      maxRounds: 50,
+      blockReduction: 0.5,
+      critMultiplierBase: 0.6, // antes 0.5 → +60% base si el atacante no trae bonus
+      damageJitter: 0.22,      // antes 0.15 → más dispersión en daño normal
+      globalDamageMult: 1.08,  // +8% de daño leve, antes de DEF
+      critBonusAdd: 0.05,      // +5% al bonus de crítico (antes de mitigación)
+      critBonusMult: 1.05,     // +5% multiplicativo al bonus
+      critJitter: 0.10,        // ±10% de variación extra solo en críticos
+    } as const;
+
     const provided: ManagerOpts = typeof optsOrSeed === "number" ? { seed: optsOrSeed } : optsOrSeed ?? {};
     this.rng = provided.rng ?? (typeof provided.seed === "number" ? makeSeededRng(provided.seed) : Math.random);
     this.opts = { ...defaults, ...provided };
@@ -632,7 +676,7 @@ export class CombatManager {
     }
 
     // 2) Block
-    const defHasShield = (D.weaponOff?.category ?? "").toLowerCase() === "shield";
+    const defHasShield = (D.weaponOff?.category ?? "weapon").toLowerCase() === "shield";
     const blockChance = clamp01(Deff.blockChance + (defHasShield ? SHIELD_BLOCK_BONUS : 0));
     const blocked = this.rng() < blockChance;
     if (blocked) events.push({ type: "block", actor: defenderKey });
@@ -673,6 +717,10 @@ export class CombatManager {
     const ultimatePreMult = Math.max(1, num(opts?.ultimatePreMult, 1));
     baseSum = Math.floor(baseSum * ultimatePreMult);
 
+    // 8.2) 🔧 Multiplicador global antes de DEF (aplica a todo: arma+stat+pasiva)
+    const globalMult = Math.max(0.5, num(this.opts.globalDamageMult, 1));
+    baseSum = Math.floor(baseSum * globalMult);
+
     // 9) Mitigación por DEF (softcap)
     const physDef = this.physDefEff(D, DSide);
     const magDef = this.magDefEff(D);
@@ -689,19 +737,33 @@ export class CombatManager {
       after = Math.floor(after * elementFactor);
     }
 
-    // 10) Jitter
-    const j = clamp01(num(this.opts.damageJitter, 0.15));
+    // 10) Jitter general
+    const j = clamp01(num(this.opts.damageJitter, 0.22));
     const jitterFactor = 1 - j + this.rng() * (2 * j);
     after = Math.floor(after * jitterFactor);
 
-    // 11) Crítico (bonus mitigado por criticalDamageReduction del DEFENSOR)
+    // 11) Crítico (bonus + knobs + mitigación), con jitter extra en críticos
     let critMult = 1;
+    let critJitterFactor: number | undefined = undefined;
     if (isCrit) {
-      const baseCritBonus = Math.max(0, num(A.combat.criticalDamageBonus, this.opts.critMultiplierBase));
+      // Bonus base del atacante (puede venir en fracción o puntos %)
+      const raw = num(A.combat.criticalDamageBonus, this.opts.critMultiplierBase);
+      const baseBonus = raw > 1 ? toFrac(raw) : raw; // 35 → 0.35 ; 0.35 → 0.35
+
+      // Tuning global ANTES de mitigar
+      const tunedBonus = Math.max(0, baseBonus * num(this.opts.critBonusMult, 1) + num(this.opts.critBonusAdd, 0));
+
+      // Mitigación del defensor
       const critDmgRed = toFrac(D.resistances?.["criticalDamageReduction"]);
-      const effCritBonus = Math.max(0, baseCritBonus - critDmgRed);
-      critMult = 1 + effCritBonus;
+      const effBonus = Math.max(0, tunedBonus - critDmgRed);
+
+      critMult = 1 + effBonus;
       after = Math.floor(after * critMult);
+
+      // Jitter extra SOLO para críticos
+      const cj = clamp01(num(this.opts.critJitter, 0.1));
+      critJitterFactor = 1 - cj + this.rng() * (2 * cj);
+      after = Math.floor(after * critJitterFactor);
     }
 
     // 12) Block
@@ -745,6 +807,8 @@ export class CombatManager {
           blockFactor: Number(blockFactor.toFixed(2)),
           drFactor: Number(drFactor.toFixed(2)),
           ultimatePreMult: Number(ultimatePreMult.toFixed(2)),
+          globalMult: Number(globalMult.toFixed(2)),
+          ...(critJitterFactor != null ? { critJitterFactor: Number(critJitterFactor.toFixed(3)) } : {}),
         },
       },
     });

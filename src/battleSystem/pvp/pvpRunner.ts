@@ -1,3 +1,8 @@
+// src/battleSystem/pvp/pvpRunner.ts
+// Runner para simulaciones PvP entre dos entidades (jugador vs jugador o NPC).
+// Usa internamente CombatManager para resolver la pelea.
+// El output es un objeto con el resultado, línea de tiempo de eventos y log de texto.
+
 import { CombatManager } from "../core/CombatManager";
 import type { WeaponData } from "../core/Weapon";
 import { normalizeWeaponData, ensureWeaponOrDefault } from "../core/Weapon";
@@ -53,7 +58,14 @@ const DEBUG_PVP = false;
 const toNum = (v: any, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 const pctToFrac = (v: any) => {
-  const n = toNum(v, 0);
+  if (typeof v === "string") {
+    const s = v.replace?.("%", "").replace?.(",", ".") ?? v;
+    const n = Number(s);
+    if (!Number.isFinite(n)) return 0;
+    return n > 1 ? n / 100 : n < 0 ? 0 : n;
+  }
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
   return n > 1 ? n / 100 : n < 0 ? 0 : n;
 };
 const i = (n: any, def = 0) => (Number.isFinite(Number(n)) ? Number(n) : def);
@@ -73,11 +85,13 @@ function extractWeapons(raw: any): { main: WeaponData; off?: WeaponData | null }
     raw?.equipment?.mainHand ??
     raw?.equipment?.mainWeapon ??
     null;
+
   const offRaw =
     raw?.offHand ??
     raw?.offhand ??
     raw?.equipment?.offHand ??
     raw?.equipment?.offhand ??
+    raw?.equipment?.offWeapon ?? // ← compat
     raw?.equipment?.shield ??
     null;
 
@@ -97,6 +111,7 @@ function toCMEntity(raw: any, rng: () => number) {
     blockChance: clamp01(pctToFrac(csRaw.blockChance)),
     damageReduction: clamp01(pctToFrac(csRaw.damageReduction)),
     criticalChance: clamp01(pctToFrac(csRaw.criticalChance)),
+    // Si viene como puntos % (ej: 50) se vuelve 0.5; si ya es 0.5 se respeta.
     criticalDamageBonus: Math.max(0, pctToFrac(csRaw.criticalDamageBonus ?? 0.5)),
     attackSpeed: Math.max(1, Math.round(toNum(csRaw.attackSpeed, 6))),
     maxHP: toNum(csRaw.maxHP ?? raw?.maxHP, 100),
@@ -117,28 +132,26 @@ function toCMEntity(raw: any, rng: () => number) {
   const passiveDefaultSkill =
     cls?.passiveDefaultSkill ?? raw?.passiveDefaultSkill ?? undefined;
   const ultimateSkill = cls?.ultimateSkill ?? raw?.ultimateSkill ?? undefined;
-  const primaryWeapons: string[] | undefined = Array.isArray(
-    cls?.primaryWeapons
-  )
+  const primaryWeapons: string[] | undefined = Array.isArray(cls?.primaryWeapons)
     ? cls.primaryWeapons
+    : Array.isArray(raw?.class?.primaryWeapons)
+    ? raw.class.primaryWeapons
     : undefined;
 
   return {
     name: raw?.name ?? raw?.username ?? "—",
     className: raw?.className ?? raw?.class?.name ?? undefined,
-    baseStats: raw?.baseStats ?? raw?.stats ?? {},
-    stats: raw?.stats ?? {},
+    baseStats: raw?.baseStats ?? raw?.stats ?? {}, // fate vive acá
+    stats: raw?.stats ?? {}, // physicalDefense / magicalDefense
     resistances: raw?.resistances ?? {},
     equipment: raw?.equipment ?? {},
     maxHP,
     currentHP,
     combat: combatNorm,
-    combatStats: combatNorm,
+    combatStats: combatNorm, // compat
     weaponMain: main,
     weaponOff: off ?? null,
-    classMeta: {
-      primaryWeapons: primaryWeapons ?? raw?.class?.primaryWeapons ?? undefined,
-    },
+    classMeta: { primaryWeapons },
     passiveDefaultSkill,
     ultimateSkill,
   };
@@ -150,18 +163,33 @@ export function runPvp({
   defenderSnapshot,
   seed,
   maxRounds = 30,
+  // Ajustes opcionales (no rompen compat si no los enviás)
+  damageJitter,         // ej. 0.22 para mayor variación
+  critMultiplierBase,   // ej. 0.65 para críticos más potentes
+  blockReduction,       // ej. 0.45 para que el block reduzca un poco menos
 }: {
   attackerSnapshot: any;
   defenderSnapshot: any;
   seed: number;
   maxRounds?: number;
+  damageJitter?: number;
+  critMultiplierBase?: number;
+  blockReduction?: number;
 }): PvpFightResult {
   const rng = mulberry32(seed || 1);
 
   const attacker = toCMEntity(attackerSnapshot, rng);
   const defender = toCMEntity(defenderSnapshot, rng);
 
-  const cm = new CombatManager(attacker, defender, { rng });
+  // Pasamos los “tunes” al manager (si vienen). Si no, usa sus defaults.
+  const cm = new CombatManager(attacker, defender, {
+    rng,
+    damageJitter,
+    critMultiplierBase,
+    blockReduction,
+    // El CombatManager lleva su propio maxRounds interno por seguridad,
+    // pero el bucle de abajo ya limita por `maxRounds` (turnos).
+  });
 
   const timeline: TimelineEntry[] = [];
   const log: string[] = [];

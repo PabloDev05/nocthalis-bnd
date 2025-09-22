@@ -1,5 +1,7 @@
 // src/battleSystem/fixtures/Fixtures.ts
-// Fixtures DEV listos para el pvpRunner, alineados con tu seed de clases.
+// Fixtures DEV listos para el pvpRunner, alineados con tu seed de clases (enteros).
+// - Usamos constitution.
+// - Porcentajes como enteros 0..100 (el runner hace clamp si hace falta).
 
 import type { ResistancesMap as Resistances } from "../constants/resistances";
 
@@ -9,7 +11,7 @@ export type BaseStats = {
   strength: number;
   dexterity: number;
   intelligence: number;
-  vitality: number;
+  constitution: number;   
   physicalDefense: number;
   magicalDefense: number;
   luck: number;
@@ -22,19 +24,24 @@ export type CombatStats = {
   attackPower: number;
   magicPower: number;
 
-  // Estos campos pueden estar en puntos % (0..100). El runner normaliza.
-  criticalChance: number; // %
-  criticalDamageBonus: number; // % o fracción (soporta ambos)
-  attackSpeed: number; // %
-  evasion: number; // %
-  blockChance: number; // %
-  blockValue: number;
-  lifeSteal: number; // %
-  damageReduction: number; // %
-  movementSpeed: number; // %
+  // Porcentajes SIEMPRE en 0..100 (el runner normaliza/clamp).
+  criticalChance: number;       // 0..100
+  criticalDamageBonus: number;  // 0..100 (ej. 35 = +35%)
+  attackSpeed: number;          // 0..100
+  evasion: number;              // 0..100
+  blockChance: number;          // 0..100
+  blockValue: number;           // plano
+  lifeSteal: number;            // 0..100
+  damageReduction: number;      // 0..100
+  movementSpeed: number;        // 0..100
 };
 
-type PassiveTriggerCheck = "onBasicHit" | "onRangedHit" | "onSpellCast" | "onHitOrBeingHit" | "onTurnStart";
+type PassiveTriggerCheck =
+  | "onBasicHit"
+  | "onRangedHit"
+  | "onSpellCast"
+  | "onHitOrBeingHit"
+  | "onTurnStart";
 
 type PassiveDefaultSkillCfg = {
   enabled?: boolean;
@@ -70,7 +77,7 @@ type UltimateSkillCfg = {
     enabled?: boolean;
     respectCooldown?: boolean;
     trigger?: {
-      check: PassiveTriggerCheck; // usamos "onTurnStart"
+      check: PassiveTriggerCheck; // típicamente "onTurnStart"
       scaleBy?: "fate";
       baseChancePercent?: number;
       fateScalePerPoint?: number;
@@ -111,7 +118,7 @@ type FixtureSnapshot = {
 
 /* ───────────────── Seed: definiciones por clase ───────────────── */
 
-// 1) Vampire
+// 1) Vampire (STR/DEX físico)
 const CLASS_VAMPIRE: ClassCfg = {
   name: "Vampire",
   primaryWeapons: ["Rapier", "Dagger"],
@@ -120,10 +127,17 @@ const CLASS_VAMPIRE: ClassCfg = {
   passiveDefaultSkill: {
     enabled: true,
     name: "Crimson Impulse",
-    damageType: "magical",
-    shortDescEn: "+6 magic damage and +2 Evasion for 3 turns (scales with Fate).",
-    longDescEn: "On basic hits, may grant +6 magic damage and +2 Evasion for 3 turns. Chance = min(7% + Fate×1, 35%). No stacking; refresh duration if active.",
-    trigger: { check: "onBasicHit", scaleBy: "fate", baseChancePercent: 7, fateScalePerPoint: 1, maxChancePercent: 35 },
+    damageType: "physical",
+    shortDescEn: "+6 physical damage and +2 Evasion for 3 turns (scales with Fate).",
+    longDescEn:
+      "On basic hits, may grant +6 physical damage and +2 Evasion for 3 turns. Chance = min(7% + Fate×1, 35%). No stacking; refresh duration if active.",
+    trigger: {
+      check: "onBasicHit",
+      scaleBy: "fate",
+      baseChancePercent: 7,
+      fateScalePerPoint: 1,
+      maxChancePercent: 35,
+    },
     durationTurns: 3,
     bonusDamage: 6,
     extraEffects: { evasionFlat: 2 },
@@ -131,13 +145,25 @@ const CLASS_VAMPIRE: ClassCfg = {
   ultimateSkill: {
     enabled: true,
     name: "Crimson Feast",
-    description: "A precise strike for +60% physical damage. Applies 'Weaken' (-10% Physical Defense for 2 turns).",
+    description:
+      "A precise strike for +60% physical damage. Applies 'Weaken' (-10% Physical Defense for 2 turns).",
     cooldownTurns: 6,
-    effects: { bonusDamagePercent: 60, applyDebuff: "weaken", debuffValue: -10, debuffDurationTurns: 2 },
+    effects: {
+      bonusDamagePercent: 60,
+      applyDebuff: "weaken",
+      debuffValue: -10,
+      debuffDurationTurns: 2,
+    },
     proc: {
       enabled: true,
       respectCooldown: true,
-      trigger: { check: "onTurnStart", scaleBy: "fate", baseChancePercent: 1, fateScalePerPoint: 1, maxChancePercent: 8 },
+      trigger: {
+        check: "onTurnStart",
+        scaleBy: "fate",
+        baseChancePercent: 1,
+        fateScalePerPoint: 1,
+        maxChancePercent: 8,
+      },
     },
   },
 };
@@ -146,7 +172,7 @@ const STATS_VAMPIRE: BaseStats = {
   strength: 8,
   dexterity: 7,
   intelligence: 5,
-  vitality: 7,
+  constitution: 7,
   physicalDefense: 6,
   magicalDefense: 4,
   luck: 6,
@@ -188,7 +214,7 @@ const COMBAT_VAMPIRE: CombatStats = {
   movementSpeed: 5,
 };
 
-// 2) Werewolf
+// 2) Werewolf (STR físico)
 const CLASS_WEREWOLF: ClassCfg = {
   name: "Werewolf",
   primaryWeapons: ["Iron Claws", "Dual Daggers"],
@@ -197,10 +223,17 @@ const CLASS_WEREWOLF: ClassCfg = {
   passiveDefaultSkill: {
     enabled: true,
     name: "Lupine Frenzy",
-    damageType: "magical",
-    shortDescEn: "+7 magic damage and +2 Attack Speed for 3 turns (scales with Fate).",
-    longDescEn: "On basic hits, may grant +7 magic damage and +2 Attack Speed for 3 turns. Chance = min(6% + Fate×1, 32%). No stacking; refresh duration.",
-    trigger: { check: "onBasicHit", scaleBy: "fate", baseChancePercent: 6, fateScalePerPoint: 1, maxChancePercent: 32 },
+    damageType: "physical",
+    shortDescEn: "+7 physical damage and +2 Attack Speed for 3 turns (scales with Fate).",
+    longDescEn:
+      "On basic hits, may grant +7 physical damage and +2 Attack Speed for 3 turns. Chance = min(6% + Fate×1, 32%). No stacking; refresh duration.",
+    trigger: {
+      check: "onBasicHit",
+      scaleBy: "fate",
+      baseChancePercent: 6,
+      fateScalePerPoint: 1,
+      maxChancePercent: 32,
+    },
     durationTurns: 3,
     bonusDamage: 7,
     extraEffects: { attackSpeedFlat: 2 },
@@ -208,13 +241,25 @@ const CLASS_WEREWOLF: ClassCfg = {
   ultimateSkill: {
     enabled: true,
     name: "Savage Rend",
-    description: "A ferocious claw strike for +65% physical damage. Applies 'Bleed' (8 damage per turn for 2 turns).",
+    description:
+      "A ferocious claw strike for +65% physical damage. Applies 'Bleed' (8 damage per turn for 2 turns).",
     cooldownTurns: 6,
-    effects: { bonusDamagePercent: 65, applyDebuff: "bleed", bleedDamagePerTurn: 8, debuffDurationTurns: 2 },
+    effects: {
+      bonusDamagePercent: 65,
+      applyDebuff: "bleed",
+      bleedDamagePerTurn: 8,
+      debuffDurationTurns: 2,
+    },
     proc: {
       enabled: true,
       respectCooldown: true,
-      trigger: { check: "onTurnStart", scaleBy: "fate", baseChancePercent: 1, fateScalePerPoint: 1, maxChancePercent: 8 },
+      trigger: {
+        check: "onTurnStart",
+        scaleBy: "fate",
+        baseChancePercent: 1,
+        fateScalePerPoint: 1,
+        maxChancePercent: 8,
+      },
     },
   },
 };
@@ -223,7 +268,7 @@ const STATS_WEREWOLF: BaseStats = {
   strength: 10,
   dexterity: 8,
   intelligence: 3,
-  vitality: 9,
+  constitution: 9, 
   physicalDefense: 7,
   magicalDefense: 3,
   luck: 4,
@@ -265,7 +310,7 @@ const COMBAT_WEREWOLF: CombatStats = {
   movementSpeed: 7,
 };
 
-// 3) Necromancer
+// 3) Necromancer (INT mágico)
 const CLASS_NECRO: ClassCfg = {
   name: "Necromancer",
   primaryWeapons: ["Bone Staff", "Scepter"],
@@ -276,8 +321,15 @@ const CLASS_NECRO: ClassCfg = {
     name: "Umbral Focus",
     damageType: "magical",
     shortDescEn: "+9 magic damage and +3 Magic Power for 3 turns (scales with Fate).",
-    longDescEn: "On spell cast, may grant +9 magic damage and +3 Magic Power for 3 turns. Chance = min(7% + Fate×1, 35%). No stacking; refresh duration.",
-    trigger: { check: "onSpellCast", scaleBy: "fate", baseChancePercent: 7, fateScalePerPoint: 1, maxChancePercent: 35 },
+    longDescEn:
+      "On spell cast, may grant +9 magic damage and +3 Magic Power for 3 turns. Chance = min(7% + Fate×1, 35%). No stacking; refresh duration.",
+    trigger: {
+      check: "onSpellCast",
+      scaleBy: "fate",
+      baseChancePercent: 7,
+      fateScalePerPoint: 1,
+      maxChancePercent: 35,
+    },
     durationTurns: 3,
     bonusDamage: 9,
     extraEffects: { magicPowerFlat: 3 },
@@ -285,13 +337,25 @@ const CLASS_NECRO: ClassCfg = {
   ultimateSkill: {
     enabled: true,
     name: "Soul Curse",
-    description: "A single target blast for +55% magic damage. Applies 'Curse' (-10% Attack for 2 turns).",
+    description:
+      "A single target blast for +55% magic damage. Applies 'Curse' (-10% Attack for 2 turns).",
     cooldownTurns: 6,
-    effects: { bonusDamagePercent: 55, applyDebuff: "curse", debuffValue: -10, debuffDurationTurns: 2 },
+    effects: {
+      bonusDamagePercent: 55,
+      applyDebuff: "curse",
+      debuffValue: -10,
+      debuffDurationTurns: 2,
+    },
     proc: {
       enabled: true,
       respectCooldown: true,
-      trigger: { check: "onTurnStart", scaleBy: "fate", baseChancePercent: 1, fateScalePerPoint: 1, maxChancePercent: 8 },
+      trigger: {
+        check: "onTurnStart",
+        scaleBy: "fate",
+        baseChancePercent: 1,
+        fateScalePerPoint: 1,
+        maxChancePercent: 8,
+      },
     },
   },
 };
@@ -300,7 +364,7 @@ const STATS_NECRO: BaseStats = {
   strength: 3,
   dexterity: 4,
   intelligence: 12,
-  vitality: 6,
+  constitution: 6,
   physicalDefense: 3,
   magicalDefense: 8,
   luck: 5,
@@ -342,7 +406,7 @@ const COMBAT_NECRO: CombatStats = {
   movementSpeed: 4,
 };
 
-// 4) Revenant
+// 4) Revenant (DEX físico)
 const CLASS_REVENANT: ClassCfg = {
   name: "Revenant",
   primaryWeapons: ["Cursed Crossbow", "Twin Flintlocks"],
@@ -351,10 +415,17 @@ const CLASS_REVENANT: ClassCfg = {
   passiveDefaultSkill: {
     enabled: true,
     name: "Spectral Deadeye",
-    damageType: "magical",
-    shortDescEn: "+5 magic damage and +2% Critical Chance for 3 turns (scales with Fate).",
-    longDescEn: "On ranged hits, may grant +5 magic damage and +2% Critical Chance for 3 turns. Chance = min(8% + Fate×1, 36%). No stacking; refresh duration.",
-    trigger: { check: "onRangedHit", scaleBy: "fate", baseChancePercent: 8, fateScalePerPoint: 1, maxChancePercent: 36 },
+    damageType: "physical",
+    shortDescEn: "+5 physical damage and +2% Critical Chance for 3 turns (scales with Fate).",
+    longDescEn:
+      "On ranged hits, may grant +5 physical damage and +2% Critical Chance for 3 turns. Chance = min(8% + Fate×1, 36%). No stacking; refresh duration.",
+    trigger: {
+      check: "onRangedHit",
+      scaleBy: "fate",
+      baseChancePercent: 8,
+      fateScalePerPoint: 1,
+      maxChancePercent: 36,
+    },
     durationTurns: 3,
     bonusDamage: 5,
     extraEffects: { criticalChancePercent: 2 },
@@ -362,13 +433,25 @@ const CLASS_REVENANT: ClassCfg = {
   ultimateSkill: {
     enabled: true,
     name: "Wraithshot",
-    description: "A cursed projectile for +60% physical damage. Applies 'Fear' (reduces enemy Critical Chance by -10% for 2 turns).",
+    description:
+      "A cursed projectile for +60% physical damage. Applies 'Fear' (reduces enemy Critical Chance by -10% for 2 turns).",
     cooldownTurns: 6,
-    effects: { bonusDamagePercent: 60, applyDebuff: "fear", debuffValue: -10, debuffDurationTurns: 2 },
+    effects: {
+      bonusDamagePercent: 60,
+      applyDebuff: "fear",
+      debuffValue: -10,
+      debuffDurationTurns: 2,
+    },
     proc: {
       enabled: true,
       respectCooldown: true,
-      trigger: { check: "onTurnStart", scaleBy: "fate", baseChancePercent: 1, fateScalePerPoint: 1, maxChancePercent: 8 },
+      trigger: {
+        check: "onTurnStart",
+        scaleBy: "fate",
+        baseChancePercent: 1,
+        fateScalePerPoint: 1,
+        maxChancePercent: 8,
+      },
     },
   },
 };
@@ -377,7 +460,7 @@ const STATS_REVENANT: BaseStats = {
   strength: 6,
   dexterity: 11,
   intelligence: 5,
-  vitality: 6,
+  constitution: 6,
   physicalDefense: 4,
   magicalDefense: 5,
   luck: 6,
@@ -419,7 +502,7 @@ const COMBAT_REVENANT: CombatStats = {
   movementSpeed: 7,
 };
 
-// 5) Exorcist
+// 5) Exorcist (INT mágico)
 const CLASS_EXORCIST: ClassCfg = {
   name: "Exorcist",
   primaryWeapons: ["Holy Mace", "Flail"],
@@ -430,8 +513,15 @@ const CLASS_EXORCIST: ClassCfg = {
     name: "Hallowed Smite",
     damageType: "magical",
     shortDescEn: "+6 magic damage and +2% Block Chance for 3 turns (scales with Fate).",
-    longDescEn: "On hit or when being hit, may grant +6 magic damage and +2% Block Chance for 3 turns. Chance = min(7% + Fate×1, 34%). No stacking; refresh duration.",
-    trigger: { check: "onHitOrBeingHit", scaleBy: "fate", baseChancePercent: 7, fateScalePerPoint: 1, maxChancePercent: 34 },
+    longDescEn:
+      "On hit or when being hit, may grant +6 magic damage and +2% Block Chance for 3 turns. Chance = min(7% + Fate×1, 34%). No stacking; refresh duration.",
+    trigger: {
+      check: "onHitOrBeingHit",
+      scaleBy: "fate",
+      baseChancePercent: 7,
+      fateScalePerPoint: 1,
+      maxChancePercent: 34,
+    },
     durationTurns: 3,
     bonusDamage: 6,
     extraEffects: { blockChancePercent: 2 },
@@ -439,13 +529,20 @@ const CLASS_EXORCIST: ClassCfg = {
   ultimateSkill: {
     enabled: true,
     name: "Sacred Judgement",
-    description: "A heavy mace strike for +55% magic holy damage. Applies 'Silence' (target cannot use ultimate next turn).",
+    description:
+      "A heavy mace strike for +55% magic holy damage. Applies 'Silence' (target cannot use ultimate next turn).",
     cooldownTurns: 7,
     effects: { bonusDamagePercent: 55, applyDebuff: "silence", debuffDurationTurns: 1 },
     proc: {
       enabled: true,
       respectCooldown: true,
-      trigger: { check: "onTurnStart", scaleBy: "fate", baseChancePercent: 1, fateScalePerPoint: 1, maxChancePercent: 8 },
+      trigger: {
+        check: "onTurnStart",
+        scaleBy: "fate",
+        baseChancePercent: 1,
+        fateScalePerPoint: 1,
+        maxChancePercent: 8,
+      },
     },
   },
 };
@@ -454,7 +551,7 @@ const STATS_EXORCIST: BaseStats = {
   strength: 6,
   dexterity: 5,
   intelligence: 10,
-  vitality: 8,
+  constitution: 8,
   physicalDefense: 6,
   magicalDefense: 7,
   luck: 5,
@@ -501,16 +598,26 @@ const COMBAT_EXORCIST: CombatStats = {
 type FixtureOpts = {
   name?: string;
   level?: number;
-  weapon?: string; // override; si no, usa class.defaultWeapon
-  currentHPPct?: number; // 1..100 (por si querés iniciar dañado en tests)
+  weapon?: string;      // override; si no, usa class.defaultWeapon
+  currentHPPct?: number; // 1..100 para iniciar dañado en tests
 };
 
-function buildFixture(classCfg: ClassCfg, stats: BaseStats, res: Resistances, cmb: CombatStats, opts: FixtureOpts = {}): FixtureSnapshot {
+function clamp01to100(n: number) {
+  return Math.max(1, Math.min(100, Math.round(n)));
+}
+
+function buildFixture(
+  classCfg: ClassCfg,
+  stats: BaseStats,
+  res: Resistances,
+  cmb: CombatStats,
+  opts: FixtureOpts = {}
+): FixtureSnapshot {
   const name = opts.name ?? classCfg.name;
   const level = Math.max(1, Math.floor(opts.level ?? 1));
   const maxHP = cmb.maxHP;
-  const currentHP =
-    Math.max(1, Math.min(100, Math.round(opts.currentHPPct ?? 100))) === 100 ? maxHP : Math.max(1, Math.floor((maxHP * Math.max(1, Math.min(100, Math.round(opts.currentHPPct ?? 100)))) / 100));
+  const pct = clamp01to100(opts.currentHPPct ?? 100);
+  const currentHP = pct === 100 ? maxHP : Math.max(1, Math.floor((maxHP * pct) / 100));
 
   return {
     name,

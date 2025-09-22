@@ -25,7 +25,7 @@ export interface SeedEnemy {
     strength: number;
     dexterity: number;
     intelligence: number;
-    vitality: number;
+    constitution: number;
     physicalDefense: number;
     magicalDefense: number;
     luck: number;
@@ -115,37 +115,37 @@ const ARCHETYPES: Record<
   }
 > = {
   melee: {
-    base: { strength: 6, vitality: 6, physicalDefense: 4, endurance: 5, dexterity: 5, luck: 2, intelligence: 2, magicalDefense: 2 },
-    growth: { strength: 1.4, vitality: 1.3, physicalDefense: 0.8, endurance: 0.9, dexterity: 0.7 },
+    base: { strength: 6, constitution: 6, physicalDefense: 4, endurance: 5, dexterity: 5, luck: 2, intelligence: 2, magicalDefense: 2 },
+    growth: { strength: 1.4, constitution: 1.3, physicalDefense: 0.8, endurance: 0.9, dexterity: 0.7 },
     namePool: ["Bandido", "Matón", "Bruto", "Mercenario", "Espadachín"],
     image: "/assets/enemies/melee.png",
   },
   archer: {
-    base: { dexterity: 11, luck: 3, strength: 4, vitality: 4, physicalDefense: 3, intelligence: 3, magicalDefense: 2, endurance: 3 },
+    base: { dexterity: 11, luck: 3, strength: 4, constitution: 4, physicalDefense: 3, intelligence: 3, magicalDefense: 2, endurance: 3 },
     growth: { dexterity: 1.8, luck: 0.5, strength: 0.5 },
     namePool: ["Arquero", "Tirador", "Cazador", "Vigía", "Carroñero"],
     image: "/assets/enemies/archer.png",
   },
   mage: {
-    base: { intelligence: 12, magicalDefense: 5, vitality: 4, dexterity: 3, luck: 3, strength: 2, physicalDefense: 2, endurance: 3 },
-    growth: { intelligence: 2.0, magicalDefense: 0.9, vitality: 0.5 },
+    base: { intelligence: 12, magicalDefense: 5, constitution: 4, dexterity: 3, luck: 3, strength: 2, physicalDefense: 2, endurance: 3 },
+    growth: { intelligence: 2.0, magicalDefense: 0.9, constitution: 0.5 },
     namePool: ["Acolito", "Cultista", "Hechicero", "Brujo", "Chamán"],
     image: "/assets/enemies/mage.png",
   },
   tank: {
-    base: { vitality: 9, physicalDefense: 7, endurance: 7, strength: 5, magicalDefense: 4, dexterity: 3, luck: 2, intelligence: 2 },
-    growth: { vitality: 1.8, physicalDefense: 1.2, endurance: 1.2, strength: 1.0, magicalDefense: 0.6 },
+    base: { constitution: 9, physicalDefense: 7, endurance: 7, strength: 5, magicalDefense: 4, dexterity: 3, luck: 2, intelligence: 2 },
+    growth: { constitution: 1.8, physicalDefense: 1.2, endurance: 1.2, strength: 1.0, magicalDefense: 0.6 },
     namePool: ["Guardia", "Caballero", "Vigilante", "Rompehuesos", "Gólem"],
     image: "/assets/enemies/tank.png",
   },
   beast: {
-    base: { strength: 7, vitality: 6, physicalDefense: 4, endurance: 4, dexterity: 8, luck: 2, intelligence: 1, magicalDefense: 2 },
-    growth: { dexterity: 1.4, strength: 1.2, vitality: 1.1, physicalDefense: 0.6 },
+    base: { strength: 7, constitution: 6, physicalDefense: 4, endurance: 4, dexterity: 8, luck: 2, intelligence: 1, magicalDefense: 2 },
+    growth: { dexterity: 1.4, strength: 1.2, constitution: 1.1, physicalDefense: 0.6 },
     namePool: ["Lobo", "Jabalí", "Saurio", "Hiena", "Raptor"],
     image: "/assets/enemies/beast.png",
   },
   rogue: {
-    base: { dexterity: 11, luck: 4, strength: 4, vitality: 4, physicalDefense: 3, intelligence: 2, magicalDefense: 2, endurance: 3 },
+    base: { dexterity: 11, luck: 4, strength: 4, constitution: 4, physicalDefense: 3, intelligence: 2, magicalDefense: 2, endurance: 3 },
     growth: { dexterity: 1.9, luck: 0.6, strength: 0.5 },
     namePool: ["Ratero", "Asaltante", "Acechador", "Cuchillero", "Sombrío"],
     image: "/assets/enemies/rogue.png",
@@ -187,7 +187,7 @@ function derivedCombat(level: number, arche: ArchetypeKey, stats: SeedEnemy["sta
   const magBias = { melee: 0.4, archer: 0.5, mage: 1.4, tank: 0.3, beast: 0.3, rogue: 0.5 }[arche];
 
   // Base “determinista”
-  let maxHP = 40 + stats.vitality * 10 + level * 12 + stats.physicalDefense * 2;
+  let maxHP = 40 + stats.constitution * 10 + level * 12 + stats.physicalDefense * 2;
   let attackPower = stats.strength * 2 + stats.dexterity * 1.2 + level * (2.0 * atkBias);
   let magicPower = stats.intelligence * 2.6 + level * (2.2 * magBias);
 
@@ -196,7 +196,7 @@ function derivedCombat(level: number, arche: ArchetypeKey, stats: SeedEnemy["sta
   let attackSpeed = 4 + stats.dexterity / 2;
   let evasion = 3 + stats.dexterity * 0.8;
   let blockChance = (stats.physicalDefense + stats.endurance) / 8;
-  let blockValue = (stats.physicalDefense + stats.vitality) / 3;
+  let blockValue = (stats.physicalDefense + stats.constitution) / 3;
   let lifeSteal = 0;
   let damageReduction = (stats.physicalDefense + stats.magicalDefense) / 4;
   let movementSpeed = 4 + stats.dexterity / 3;
@@ -238,7 +238,7 @@ function roundStats(obj: Partial<SeedEnemy["stats"]>, rnd: () => number, tier: E
     strength: 0,
     dexterity: 0,
     intelligence: 0,
-    vitality: 0,
+    constitution: 0,
     physicalDefense: 0,
     magicalDefense: 0,
     luck: 0,
