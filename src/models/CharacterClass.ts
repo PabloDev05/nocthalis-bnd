@@ -24,18 +24,18 @@ export const TRIGGER_CHECKS = [
   "onCrit",
   "onBattleStart",
   "alwaysOn",
-  "onFirstHit", // <- agregado para tu seed
+  "onFirstHit",
 ] as const;
-export type TriggerCheck = typeof TRIGGER_CHECKS[number];
+export type TriggerCheck = (typeof TRIGGER_CHECKS)[number];
 
 /* ========================================================================== *
- * Tipos locales (auto-contenidos; no dependemos de interfaces externas)
+ * Tipos locales
  * ========================================================================== */
 export type BaseStats = {
   strength: number;
   dexterity: number;
   intelligence: number;
-  constitution: number;      
+  constitution: number;
   physicalDefense: number;
   magicalDefense: number;
   luck: number;
@@ -48,30 +48,42 @@ export type CombatStats = {
   attackPower: number;
   magicPower: number;
 
-  criticalChance: number;       // puntos enteros
-  criticalDamageBonus: number;  // puntos enteros
-  attackSpeed: number;          // puntos enteros
-  evasion: number;              // puntos enteros
-  blockChance: number;          // puntos enteros
-  blockValue: number;           // enteros
-  lifeSteal: number;            // enteros
-  damageReduction: number;      // enteros
-  movementSpeed: number;        // enteros
+  criticalChance: number;
+  criticalDamageBonus: number;
+  attackSpeed: number;
+  evasion: number;
+  blockChance: number;
+  blockValue: number;
+  lifeSteal: number;
+  damageReduction: number;
+  movementSpeed: number;
 };
 
 export type Resistances = {
-  fire: number; ice: number; lightning: number; poison: number;
-  sleep: number; paralysis: number; confusion: number; fear: number;
-  dark: number; holy: number; stun: number; bleed: number; curse: number;
-  knockback: number; criticalChanceReduction: number; criticalDamageReduction: number;
+  fire: number;
+  ice: number;
+  lightning: number;
+  poison: number;
+  sleep: number;
+  paralysis: number;
+  confusion: number;
+  fear: number;
+  dark: number;
+  holy: number;
+  stun: number;
+  bleed: number;
+  curse: number;
+  knockback: number;
+  criticalChanceReduction: number;
+  criticalDamageReduction: number;
 };
 
 export type ProcTrigger = {
   check: TriggerCheck;
   scaleBy: "fate";
-  baseChancePercent: number;   // 0..100 (entero)
-  fateScalePerPoint: number;   // entero
-  maxChancePercent: number;    // 0..100 (entero)
+  baseChancePercent: number;
+  fateScalePerPoint: number;
+  maxChancePercent: number;
 };
 
 export type PassiveDefaultSkill = {
@@ -81,22 +93,22 @@ export type PassiveDefaultSkill = {
   shortDescEn?: string;
   longDescEn?: string;
   trigger: ProcTrigger;
-  durationTurns: number;       // entero
-  bonusDamage?: number;        // entero
-  extraEffects?: Record<string, number>; // enteros
+  durationTurns: number;
+  bonusDamage?: number;
+  extraEffects?: Record<string, number>;
 };
 
 export type UltimateSkill = {
   enabled?: boolean;
   name: string;
   description?: string;
-  cooldownTurns: number; // entero
+  cooldownTurns: number;
   effects?: {
-    bonusDamagePercent?: number;   // entero
+    bonusDamagePercent?: number;
     applyDebuff?: string;
-    debuffValue?: number;          // entero
-    bleedDamagePerTurn?: number;   // entero
-    debuffDurationTurns?: number;  // entero
+    debuffValue?: number;
+    bleedDamagePerTurn?: number;
+    debuffDurationTurns?: number;
   };
   proc?: {
     enabled?: boolean;
@@ -110,10 +122,10 @@ export type SubclassPassive = {
   name: string;
   description: string;
   detail?: string;
-  trigger?: ProcTrigger;                   // opcional
+  trigger?: ProcTrigger;
   effects?: Record<string, number | string>;
-  durationTurns?: number;                  // entero
-  cooldownTurns?: number;                  // entero
+  durationTurns?: number;
+  cooldownTurns?: number;
 };
 
 export type Subclass = {
@@ -148,7 +160,7 @@ export interface CharacterClassDoc extends Document<Types.ObjectId> {
 
   createdAt: Date;
   updatedAt: Date;
-  id: string; // virtual
+  id: string;
 }
 export interface CharacterClassModel extends Model<CharacterClassDoc> {}
 
@@ -157,15 +169,15 @@ export interface CharacterClassModel extends Model<CharacterClassDoc> {}
  * ========================================================================== */
 const BaseStatsSchema = new Schema<BaseStats>(
   {
-    strength:        { type: Number, required: true, default: 0, set: I0 },
-    dexterity:       { type: Number, required: true, default: 0, set: I0 },
-    intelligence:    { type: Number, required: true, default: 0, set: I0 },
-    constitution:    { type: Number, required: true, default: 0, set: I0 }, // nueva
+    strength: { type: Number, required: true, default: 0, set: I0 },
+    dexterity: { type: Number, required: true, default: 0, set: I0 },
+    intelligence: { type: Number, required: true, default: 0, set: I0 },
+    constitution: { type: Number, required: true, default: 0, set: I0 },
     physicalDefense: { type: Number, required: true, default: 0, set: I0 },
-    magicalDefense:  { type: Number, required: true, default: 0, set: I0 },
-    luck:            { type: Number, required: true, default: 0, set: I0 },
-    endurance:       { type: Number, required: true, default: 0, set: I0 },
-    fate:            { type: Number, required: true, default: 0, set: I0 },
+    magicalDefense: { type: Number, required: true, default: 0, set: I0 },
+    luck: { type: Number, required: true, default: 0, set: I0 },
+    endurance: { type: Number, required: true, default: 0, set: I0 },
+    fate: { type: Number, required: true, default: 0, set: I0 },
   },
   { _id: false }
 );
@@ -174,17 +186,17 @@ const CombatStatsSchema = new Schema<CombatStats>(
   {
     maxHP: { type: Number, required: true, default: 1, set: I0 },
     attackPower: { type: Number, required: true, default: 0, set: I0 },
-    magicPower:  { type: Number, required: true, default: 0, set: I0 },
+    magicPower: { type: Number, required: true, default: 0, set: I0 },
 
-    criticalChance:      { type: Number, required: true, default: 0, set: I0 },
+    criticalChance: { type: Number, required: true, default: 0, set: I0 },
     criticalDamageBonus: { type: Number, required: true, default: 0, set: I0 },
-    attackSpeed:         { type: Number, required: true, default: 0, set: I0 },
-    evasion:             { type: Number, required: true, default: 0, set: I0 },
-    blockChance:         { type: Number, required: true, default: 0, set: I0 },
-    blockValue:          { type: Number, required: true, default: 0, set: I0 },
-    lifeSteal:           { type: Number, required: true, default: 0, set: I0 },
-    damageReduction:     { type: Number, required: true, default: 0, set: I0 },
-    movementSpeed:       { type: Number, required: true, default: 0, set: I0 },
+    attackSpeed: { type: Number, required: true, default: 0, set: I0 },
+    evasion: { type: Number, required: true, default: 0, set: I0 },
+    blockChance: { type: Number, required: true, default: 0, set: I0 },
+    blockValue: { type: Number, required: true, default: 0, set: I0 },
+    lifeSteal: { type: Number, required: true, default: 0, set: I0 },
+    damageReduction: { type: Number, required: true, default: 0, set: I0 },
+    movementSpeed: { type: Number, required: true, default: 0, set: I0 },
   },
   { _id: false }
 );
@@ -265,8 +277,8 @@ const SubclassPassiveSchema = new Schema<SubclassPassive>(
     name: { type: String, required: true },
     description: { type: String, required: true },
     detail: { type: String },
-    trigger: { type: ProcTriggerSchema, required: false }, // opcional
-    effects: { type: Schema.Types.Mixed, default: {} },   // mantener ints
+    trigger: { type: ProcTriggerSchema, required: false },
+    effects: { type: Schema.Types.Mixed, default: {} },
     durationTurns: { type: Number, set: I0 },
     cooldownTurns: { type: Number, set: I0 },
   },
@@ -329,7 +341,4 @@ const CharacterClassSchema = new Schema<CharacterClassDoc>(
 CharacterClassSchema.index({ name: 1 }, { unique: true });
 CharacterClassSchema.index({ "subclasses.slug": 1 });
 
-/* Export del modelo (named export) */
-export const CharacterClass =
-  (mongoose.models.CharacterClass as CharacterClassModel) ||
-  model<CharacterClassDoc, CharacterClassModel>("CharacterClass", CharacterClassSchema);
+export const CharacterClass = (mongoose.models.CharacterClass as CharacterClassModel) || model<CharacterClassDoc, CharacterClassModel>("CharacterClass", CharacterClassSchema);

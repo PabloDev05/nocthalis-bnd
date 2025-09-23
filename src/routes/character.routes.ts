@@ -6,7 +6,7 @@ import { chooseSubclass } from "../controllers/chooseSubClass.controller";
 import { getMyCharacter } from "../controllers/character.controller";
 import { getProgression } from "../controllers/characterProgression.controller";
 import { getInventory, equipItem, unequipItem, useConsumable } from "../controllers/characterEquipment.controller";
-import { allocatePointsController } from "../controllers/allocatePoints.controller";
+import allocatePointsController from "../controllers/allocatePoints.controller";
 
 const router = Router();
 

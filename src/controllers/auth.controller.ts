@@ -16,10 +16,7 @@ const i = (v: any, d = 0) => {
   const n = Math.trunc(Number(v));
   return Number.isFinite(n) ? n : d;
 };
-const sanitizeBlock = <T extends Record<string, any>>(obj: T | undefined | null): T =>
-  Object.fromEntries(
-    Object.entries(obj || {}).map(([k, v]) => [k, i(v, 0)])
-  ) as T;
+const sanitizeBlock = <T extends Record<string, any>>(obj: T | undefined | null): T => Object.fromEntries(Object.entries(obj || {}).map(([k, v]) => [k, i(v, 0)])) as T;
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -100,12 +97,22 @@ export const register = async (req: Request, res: Response) => {
     ).then((r) => r[0]);
 
     // Bloques base (enteros)
-    const stats        = sanitizeBlock(clazz.baseStats);       // ← con constitution/fate
-    const resistances  = sanitizeBlock(clazz.resistances);
-    const combatStats  = sanitizeBlock(clazz.combatStats);
+    const stats = sanitizeBlock(clazz.baseStats); // ← con constitution/fate
+    const resistances = sanitizeBlock(clazz.resistances);
+    const combatStats = sanitizeBlock(clazz.combatStats);
+
+    // Blindaje de maxHP:
+    // - Usamos el de la clase si viene válido
+    // - Si no, fallback entero coherente con tu regla: 100 + CON*10
+    const computedMaxHpFromClass = i((combatStats as any).maxHP, 0);
+    const fallbackMaxHP = 100 + i((stats as any).constitution, 0) * 10;
+    const maxHP = Math.max(1, computedMaxHpFromClass > 0 ? computedMaxHpFromClass : fallbackMaxHP);
+
+    // Escribimos también en el bloque de combate para mantener consistencia
+    (combatStats as any).maxHP = maxHP;
 
     // Vida inicial = tope del bloque de combate
-    const currentHP = Math.max(1, i(combatStats.maxHP, 1));
+    const currentHP = maxHP;
 
     // Equipo inicial: arma por defecto de la clase
     const equipment = {
@@ -113,7 +120,7 @@ export const register = async (req: Request, res: Response) => {
       chest: null,
       gloves: null,
       boots: null,
-      mainWeapon: clazz.defaultWeapon ?? null,
+      mainWeapon: (clazz as any).defaultWeapon ?? null,
       offWeapon: null,
       ring: null,
       belt: null,
@@ -144,7 +151,8 @@ export const register = async (req: Request, res: Response) => {
           resistances,
           combatStats,
 
-          // vida fuera de combate (para UI)
+          // tope y vida actual (campos planos para UI/queries rápidas)
+          maxHP,
           currentHP,
 
           // equipo/inventario
@@ -166,11 +174,7 @@ export const register = async (req: Request, res: Response) => {
 
     await session.commitTransaction();
 
-    const token = jwt.sign(
-      { id: newUser._id.toString(), email: emailNorm, username: usernameNorm },
-      secret,
-      { expiresIn: "1h", algorithm: "HS256" }
-    );
+    const token = jwt.sign({ id: newUser._id.toString(), email: emailNorm, username: usernameNorm }, secret, { expiresIn: "1h", algorithm: "HS256" });
 
     return res.status(201).json({
       message: "Usuario registrado correctamente",
@@ -181,13 +185,15 @@ export const register = async (req: Request, res: Response) => {
         username: usernameNorm,
       },
       classChosen: true,
-      characterClass: clazz._id,      // lo que usa tu front
-      characterClassId: clazz._id,    // alias por si algo viejo lo lee
-      characterClassName: clazz.name, // útil para UI
+      characterClass: (clazz as any)._id, // lo que usa tu front
+      characterClassId: (clazz as any)._id, // alias por si algo viejo lo lee
+      characterClassName: (clazz as any).name, // útil para UI
     });
   } catch (err: any) {
     if (DBG) console.error("Register error:", err);
-    try { await session.abortTransaction(); } catch {}
+    try {
+      await session.abortTransaction();
+    } catch {}
     if (err?.code === 11000) {
       return res.status(400).json({ message: "El usuario o el email ya están registrados" });
     }
@@ -254,7 +260,7 @@ export const login = async (req: Request, res: Response) => {
     const clazz = await CharacterClass.findById((user as any).characterClass)
       .select("name")
       .lean();
-    className = clazz?.name ?? null;
+    className = (clazz as any)?.name ?? null;
   }
 
   const token = jwt.sign(
