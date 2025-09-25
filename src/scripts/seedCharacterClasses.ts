@@ -12,10 +12,7 @@ export const seedCharacterClasses = [
     secondaryWeapons: ["Shortsword", "Scimitar", "Kris", "Shadowfang Blade"],
 
     defaultWeapon: "Rapier",
-    allowedWeapons: [
-      "Rapier","Dagger","Shortsword","Scimitar","Kris","Shadowfang Blade",
-      "Crimson Scimitar","Bloodfang Sabre","Shadow Kris","Nightfang Blade","Curved Fangblade"
-    ],
+    allowedWeapons: ["Rapier", "Dagger", "Shortsword", "Scimitar", "Kris", "Shadowfang Blade", "Crimson Scimitar", "Bloodfang Sabre", "Shadow Kris", "Nightfang Blade", "Curved Fangblade"],
 
     // STR-leaning → físico
     passiveDefaultSkill: {
@@ -23,41 +20,65 @@ export const seedCharacterClasses = [
       name: "Crimson Impulse",
       damageType: "physical",
       shortDescEn: "+6 physical damage and +2 Evasion for 3 turns.",
-      longDescEn:
-        "On basic hits, may grant +6 physical damage and +2 Evasion for 3 turns. " +
-        "Chance = min(7 + Fate×1, 35). No stacking; refresh duration if active.",
-      trigger: { check: "onBasicHit", scaleBy: "fate", baseChancePercent: 7, fateScalePerPoint: 1, maxChancePercent: 35 },
+      longDescEn: "On basic hits, may grant +6 physical damage and +2 Evasion for 3 turns. " + "Chance = min(7 + Fate×1, 35). No stacking; refresh duration if active.",
+      trigger: {
+        check: "onBasicHit",
+        scaleBy: "fate",
+        baseChancePercent: 7,
+        fateScalePerPoint: 1,
+        maxChancePercent: 35,
+      },
       durationTurns: 3,
       bonusDamage: 6,
-      extraEffects: { evasionFlat: 2 }
+      extraEffects: { evasionFlat: 2 },
     },
 
     baseStats: {
       strength: 8,
       dexterity: 7,
       intelligence: 5,
-      constitution: 7,   
+      constitution: 7,
       physicalDefense: 6,
       magicalDefense: 4,
       luck: 6,
       endurance: 7,
-      fate: 5
+      fate: 5,
     },
 
     resistances: {
-      fire: 3, ice: 5, lightning: 3, poison: 4, sleep: 6, paralysis: 3,
-      confusion: 4, fear: 7, dark: 6, holy: 2, stun: 4, bleed: 8, curse: 5,
-      knockback: 3, criticalChanceReduction: 3, criticalDamageReduction: 3
+      fire: 3,
+      ice: 5,
+      lightning: 3,
+      poison: 4,
+      sleep: 6,
+      paralysis: 3,
+      confusion: 4,
+      fear: 7,
+      dark: 6,
+      holy: 2,
+      stun: 4,
+      bleed: 8,
+      curse: 5,
+      knockback: 3,
+      criticalChanceReduction: 3,
+      criticalDamageReduction: 3,
     },
 
     combatStats: {
-      maxHP: 218, attackPower: 24, magicPower: 8,
-      criticalChance: 12, criticalDamageBonus: 35,
-      attackSpeed: 6, evasion: 7, blockChance: 4, blockValue: 6,
-      lifeSteal: 8, damageReduction: 5, movementSpeed: 5
+      maxHP: 218,
+      attackPower: 24,
+      magicPower: 8,
+      criticalChance: 12,
+      criticalDamageBonus: 35,
+      evasion: 7,
+      blockChance: 4,
+      blockValue: 6,
+      lifeSteal: 8,
+      damageReduction: 5,
+      movementSpeed: 5,
     },
 
-    // Físico: debuff a DEF FÍSICA (hace sentido con STR/arma)
+    // Físico: debuff a DEF FÍSICA
     ultimateSkill: {
       enabled: true,
       name: "Crimson Feast",
@@ -68,15 +89,27 @@ export const seedCharacterClasses = [
       effects: {
         bonusDamagePercent: 60,
         applies: [
-          { tag: "weaken", stat: "physicalDefense", deltaFlat: -10, durationTurns: 3, resist: "curse" }
-        ]
+          {
+            tag: "weaken",
+            stat: "physicalDefense",
+            deltaFlat: -10,
+            durationTurns: 3,
+            resist: "curse",
+          },
+        ],
       },
       proc: {
         enabled: true,
         procInfoEn: "Turn start (≥3): Chance = min(5 + Fate×1, 15). Single use.",
-        trigger: { check: "onTurnStart", earliestTurn: 3, baseChancePercent: 5, fateScalePerPoint: 1, maxChancePercent: 15 },
-        respectCooldown: true
-      }
+        trigger: {
+          check: "onTurnStart",
+          earliestTurn: 3,
+          baseChancePercent: 5,
+          fateScalePerPoint: 1,
+          maxChancePercent: 15,
+        },
+        respectCooldown: true,
+      },
     },
 
     subclasses: [
@@ -89,16 +122,27 @@ export const seedCharacterClasses = [
           {
             name: "Voracious Bite",
             description: "On Crit, heal 5 HP.",
-            trigger: { check: "onCrit", baseChancePercent: 100, fateScalePerPoint: 0, maxChancePercent: 100 },
-            effects: { healFlat: 5 }
+            trigger: {
+              check: "onCrit",
+              baseChancePercent: 100,
+              fateScalePerPoint: 0,
+              maxChancePercent: 100,
+            },
+            effects: { healFlat: 5 },
           },
           {
             name: "Crimson Rite",
             description: "If HP < 50%, +5 Attack Power for 2 turns (chance scales with Fate).",
-            trigger: { check: "onTurnStart", condition: "hpBelow50", baseChancePercent: 10, fateScalePerPoint: 1, maxChancePercent: 30 },
-            effects: { buff: { attackPowerFlat: 5, durationTurns: 2 } }
-          }
-        ]
+            trigger: {
+              check: "onTurnStart",
+              condition: "hpBelow50",
+              baseChancePercent: 10,
+              fateScalePerPoint: 1,
+              maxChancePercent: 30,
+            },
+            effects: { buff: { attackPowerFlat: 5, durationTurns: 2 } },
+          },
+        ],
       },
       {
         name: "Nosferatu",
@@ -110,20 +154,20 @@ export const seedCharacterClasses = [
             name: "Night Shroud",
             description: "At battle start, +5 Evasion for 2 turns.",
             trigger: { check: "onBattleStart" },
-            effects: { buff: { evasionFlat: 5, durationTurns: 2 } }
+            effects: { buff: { evasionFlat: 5, durationTurns: 2 } },
           },
           {
             name: "Cold Immortality",
             description: "+5 Fear resistance.",
             trigger: { check: "alwaysOn" },
-            effects: { resistFlat: { fear: 5 } }
-          }
-        ]
-      }
+            effects: { resistFlat: { fear: 5 } },
+          },
+        ],
+      },
     ],
 
     affinities: [],
-    talents: []
+    talents: [],
   },
 
   /* ──────────────────────────── Necromancer (INT) ────────────────────────── */
@@ -137,10 +181,7 @@ export const seedCharacterClasses = [
     secondaryWeapons: ["Wand", "Occult Rod", "Grimoire", "Soul Orb"],
 
     defaultWeapon: "Bone Staff",
-    allowedWeapons: [
-      "Bone Staff","Scepter","Wand","Occult Rod","Grimoire","Soul Orb",
-      "Corrupted Scepter","Skull Wand","Plague Rod","Soulbone Cane","Ghoul Scepter","Occult Crook"
-    ],
+    allowedWeapons: ["Bone Staff", "Scepter", "Wand", "Occult Rod", "Grimoire", "Soul Orb", "Corrupted Scepter", "Skull Wand", "Plague Rod", "Soulbone Cane", "Ghoul Scepter", "Occult Crook"],
 
     // INT-leaning → mágico
     passiveDefaultSkill: {
@@ -148,13 +189,17 @@ export const seedCharacterClasses = [
       name: "Umbral Focus",
       damageType: "magical",
       shortDescEn: "+9 magic damage and +3 Magic Power for 3 turns.",
-      longDescEn:
-        "On spell cast, may grant +9 magic damage and +3 Magic Power for 3 turns. " +
-        "Chance = min(7 + Fate×1, 35). No stacking; refresh duration.",
-      trigger: { check: "onSpellCast", scaleBy: "fate", baseChancePercent: 7, fateScalePerPoint: 1, maxChancePercent: 35 },
+      longDescEn: "On spell cast, may grant +9 magic damage and +3 Magic Power for 3 turns. " + "Chance = min(7 + Fate×1, 35). No stacking; refresh duration.",
+      trigger: {
+        check: "onSpellCast",
+        scaleBy: "fate",
+        baseChancePercent: 7,
+        fateScalePerPoint: 1,
+        maxChancePercent: 35,
+      },
       durationTurns: 3,
       bonusDamage: 9,
-      extraEffects: { magicPowerFlat: 3 }
+      extraEffects: { magicPowerFlat: 3 },
     },
 
     baseStats: {
@@ -166,23 +211,43 @@ export const seedCharacterClasses = [
       magicalDefense: 8,
       luck: 5,
       endurance: 6,
-      fate: 5
+      fate: 5,
     },
 
     resistances: {
-      fire: 3, ice: 6, lightning: 4, poison: 7, sleep: 4, paralysis: 3,
-      confusion: 5, fear: 5, dark: 7, holy: 2, stun: 3, bleed: 2, curse: 8,
-      knockback: 3, criticalChanceReduction: 3, criticalDamageReduction: 3
+      fire: 3,
+      ice: 6,
+      lightning: 4,
+      poison: 7,
+      sleep: 4,
+      paralysis: 3,
+      confusion: 5,
+      fear: 5,
+      dark: 7,
+      holy: 2,
+      stun: 3,
+      bleed: 2,
+      curse: 8,
+      knockback: 3,
+      criticalChanceReduction: 3,
+      criticalDamageReduction: 3,
     },
 
     combatStats: {
-      maxHP: 206, attackPower: 8, magicPower: 32,
-      criticalChance: 8, criticalDamageBonus: 30,
-      attackSpeed: 4, evasion: 5, blockChance: 2, blockValue: 5,
-      lifeSteal: 0, damageReduction: 4, movementSpeed: 4
+      maxHP: 206,
+      attackPower: 8,
+      magicPower: 32,
+      criticalChance: 8,
+      criticalDamageBonus: 30,
+      evasion: 5,
+      blockChance: 2,
+      blockValue: 5,
+      lifeSteal: 0,
+      damageReduction: 4,
+      movementSpeed: 4,
     },
 
-    // Mágico: daño mágico + CURSE que reduce Attack Power (identidad “debilitar” física del rival)
+    // Mágico: daño mágico + CURSE que reduce Attack Power
     ultimateSkill: {
       enabled: true,
       name: "Soul Curse",
@@ -193,15 +258,27 @@ export const seedCharacterClasses = [
       effects: {
         bonusDamagePercent: 55,
         applies: [
-          { tag: "curse", stat: "attackPower", deltaFlat: -10, durationTurns: 3, resist: "curse" }
-        ]
+          {
+            tag: "curse",
+            stat: "attackPower",
+            deltaFlat: -10,
+            durationTurns: 3,
+            resist: "curse",
+          },
+        ],
       },
       proc: {
         enabled: true,
         procInfoEn: "Turn start (≥3): Chance = min(5 + Fate×1, 15). Single use.",
-        trigger: { check: "onTurnStart", earliestTurn: 3, baseChancePercent: 5, fateScalePerPoint: 1, maxChancePercent: 15 },
-        respectCooldown: true
-      }
+        trigger: {
+          check: "onTurnStart",
+          earliestTurn: 3,
+          baseChancePercent: 5,
+          fateScalePerPoint: 1,
+          maxChancePercent: 15,
+        },
+        respectCooldown: true,
+      },
     },
 
     subclasses: [
@@ -215,15 +292,20 @@ export const seedCharacterClasses = [
             name: "Bone Guard",
             description: "At battle start, +5 Damage Reduction for 2 turns.",
             trigger: { check: "onBattleStart" },
-            effects: { buff: { damageReductionFlat: 5, durationTurns: 2 } }
+            effects: { buff: { damageReductionFlat: 5, durationTurns: 2 } },
           },
           {
             name: "Corpse Burst",
             description: "On Kill, deal 10 magic damage to enemy target.",
-            trigger: { check: "onKill", baseChancePercent: 100, fateScalePerPoint: 0, maxChancePercent: 100 },
-            effects: { bonusMagicDamageFlat: 10 }
-          }
-        ]
+            trigger: {
+              check: "onKill",
+              baseChancePercent: 100,
+              fateScalePerPoint: 0,
+              maxChancePercent: 100,
+            },
+            effects: { bonusMagicDamageFlat: 10 },
+          },
+        ],
       },
       {
         name: "Soulbinder",
@@ -232,23 +314,34 @@ export const seedCharacterClasses = [
         imageSubclassUrl: "",
         passives: [
           {
+            // ⬇️ Antes bajaba attack speed. Ahora: debuff de Evasion (no relacionado a speed).
             name: "Shadow Tethers",
-            description: "On Hit, reduce enemy Speed by -5 for 1 turn (chance scales with Fate).",
-            trigger: { check: "onHit", baseChancePercent: 10, fateScalePerPoint: 1, maxChancePercent: 30 },
-            effects: { debuff: { attackSpeedFlat: -5, durationTurns: 1 } }
+            description: "On Hit, reduce enemy Evasion by -5 for 1 turn (chance scales with Fate).",
+            trigger: {
+              check: "onHit",
+              baseChancePercent: 10,
+              fateScalePerPoint: 1,
+              maxChancePercent: 30,
+            },
+            effects: { debuff: { evasionFlat: -5, durationTurns: 1 } },
           },
           {
             name: "Breath Steal",
             description: "On Kill, restore 10 HP.",
-            trigger: { check: "onKill", baseChancePercent: 100, fateScalePerPoint: 0, maxChancePercent: 100 },
-            effects: { healFlat: 10 }
-          }
-        ]
-      }
+            trigger: {
+              check: "onKill",
+              baseChancePercent: 100,
+              fateScalePerPoint: 0,
+              maxChancePercent: 100,
+            },
+            effects: { healFlat: 10 },
+          },
+        ],
+      },
     ],
 
     affinities: [],
-    talents: []
+    talents: [],
   },
 
   /* ───────────────────────────── Revenant (DEX) ──────────────────────────── */
@@ -262,10 +355,7 @@ export const seedCharacterClasses = [
     secondaryWeapons: ["Shortbow", "Arquebus", "Hexed Rifle", "Twin Daggers"],
 
     defaultWeapon: "Cursed Crossbow",
-    allowedWeapons: [
-      "Cursed Crossbow","Twin Flintlocks","Shortbow","Arquebus","Hexed Rifle","Twin Daggers",
-      "Ancient Pistol","Bone Carbine","Spectral Arquebus","Ghastly Handcannon"
-    ],
+    allowedWeapons: ["Cursed Crossbow", "Twin Flintlocks", "Shortbow", "Arquebus", "Hexed Rifle", "Twin Daggers", "Ancient Pistol", "Bone Carbine", "Spectral Arquebus", "Ghastly Handcannon"],
 
     // DEX-leaning → físico/crit
     passiveDefaultSkill: {
@@ -273,13 +363,17 @@ export const seedCharacterClasses = [
       name: "Spectral Deadeye",
       damageType: "physical",
       shortDescEn: "+5 physical damage and +2 Critical Chance for 3 turns.",
-      longDescEn:
-        "On ranged hits, may grant +5 physical damage and +2 Critical Chance for 3 turns. " +
-        "Chance = min(8 + Fate×1, 36). No stacking; refresh duration.",
-      trigger: { check: "onRangedHit", scaleBy: "fate", baseChancePercent: 8, fateScalePerPoint: 1, maxChancePercent: 36 },
+      longDescEn: "On ranged hits, may grant +5 physical damage and +2 Critical Chance for 3 turns. " + "Chance = min(8 + Fate×1, 36). No stacking; refresh duration.",
+      trigger: {
+        check: "onRangedHit",
+        scaleBy: "fate",
+        baseChancePercent: 8,
+        fateScalePerPoint: 1,
+        maxChancePercent: 36,
+      },
       durationTurns: 3,
       bonusDamage: 5,
-      extraEffects: { criticalChanceFlat: 2 }
+      extraEffects: { criticalChanceFlat: 2 },
     },
 
     baseStats: {
@@ -291,23 +385,43 @@ export const seedCharacterClasses = [
       magicalDefense: 5,
       luck: 6,
       endurance: 6,
-      fate: 5
+      fate: 5,
     },
 
     resistances: {
-      fire: 4, ice: 4, lightning: 5, poison: 4, sleep: 6, paralysis: 4,
-      confusion: 7, fear: 6, dark: 5, holy: 3, stun: 5, bleed: 4, curse: 5,
-      knockback: 6, criticalChanceReduction: 4, criticalDamageReduction: 3
+      fire: 4,
+      ice: 4,
+      lightning: 5,
+      poison: 4,
+      sleep: 6,
+      paralysis: 4,
+      confusion: 7,
+      fear: 6,
+      dark: 5,
+      holy: 3,
+      stun: 5,
+      bleed: 4,
+      curse: 5,
+      knockback: 6,
+      criticalChanceReduction: 4,
+      criticalDamageReduction: 3,
     },
 
     combatStats: {
-      maxHP: 214, attackPower: 24, magicPower: 10,
-      criticalChance: 14, criticalDamageBonus: 40,
-      attackSpeed: 6, evasion: 9, blockChance: 3, blockValue: 5,
-      lifeSteal: 2, damageReduction: 4, movementSpeed: 7
+      maxHP: 214,
+      attackPower: 24,
+      magicPower: 10,
+      criticalChance: 14,
+      criticalDamageBonus: 40,
+      evasion: 9,
+      blockChance: 3,
+      blockValue: 5,
+      lifeSteal: 2,
+      damageReduction: 4,
+      movementSpeed: 7,
     },
 
-    // Físico: Fear baja Crit del enemigo (encaja con DEX/crit)
+    // Físico: Fear baja Crit del enemigo
     ultimateSkill: {
       enabled: true,
       name: "Wraithshot",
@@ -318,15 +432,27 @@ export const seedCharacterClasses = [
       effects: {
         bonusDamagePercent: 60,
         applies: [
-          { tag: "fear", stat: "criticalChance", deltaFlat: -10, durationTurns: 3, resist: "fear" }
-        ]
+          {
+            tag: "fear",
+            stat: "criticalChance",
+            deltaFlat: -10,
+            durationTurns: 3,
+            resist: "fear",
+          },
+        ],
       },
       proc: {
         enabled: true,
         procInfoEn: "Turn start (≥3): Chance = min(5 + Fate×1, 15). Single use.",
-        trigger: { check: "onTurnStart", earliestTurn: 3, baseChancePercent: 5, fateScalePerPoint: 1, maxChancePercent: 15 },
-        respectCooldown: true
-      }
+        trigger: {
+          check: "onTurnStart",
+          earliestTurn: 3,
+          baseChancePercent: 5,
+          fateScalePerPoint: 1,
+          maxChancePercent: 15,
+        },
+        respectCooldown: true,
+      },
     },
 
     subclasses: [
@@ -340,15 +466,15 @@ export const seedCharacterClasses = [
             name: "Piercing Bolt",
             description: "Your shots ignore 10 Physical Defense for 2 turns (on first hit).",
             trigger: { check: "onFirstHit" },
-            effects: { debuff: { physicalDefenseFlat: -10, durationTurns: 2 } }
+            effects: { debuff: { physicalDefenseFlat: -10, durationTurns: 2 } },
           },
           {
             name: "Spectral Tension",
             description: "First attack of battle gains +10 Critical Chance.",
             trigger: { check: "onFirstHit" },
-            effects: { buff: { criticalChanceFlat: 10, durationTurns: 1 } }
-          }
-        ]
+            effects: { buff: { criticalChanceFlat: 10, durationTurns: 1 } },
+          },
+        ],
       },
       {
         name: "Gunslinger Shade",
@@ -359,21 +485,33 @@ export const seedCharacterClasses = [
           {
             name: "Twin Shot",
             description: "On basic ranged hit, 20% chance to fire an extra shot.",
-            trigger: { check: "onRangedHit", baseChancePercent: 20, fateScalePerPoint: 0, maxChancePercent: 20 },
-            effects: { extraHit: 1 }
+            trigger: {
+              check: "onRangedHit",
+              baseChancePercent: 20,
+              fateScalePerPoint: 0,
+              maxChancePercent: 20,
+            },
+            effects: { extraHit: 1 },
           },
           {
             name: "Hexed Bullet",
             description: "On Crit, 20% chance to apply FEAR (-5 Critical Chance) for 1 turn.",
-            trigger: { check: "onCrit", baseChancePercent: 20, fateScalePerPoint: 0, maxChancePercent: 20 },
-            effects: { debuff: { criticalChanceFlat: -5, durationTurns: 1, tag: "fear" } }
-          }
-        ]
-      }
+            trigger: {
+              check: "onCrit",
+              baseChancePercent: 20,
+              fateScalePerPoint: 0,
+              maxChancePercent: 20,
+            },
+            effects: {
+              debuff: { criticalChanceFlat: -5, durationTurns: 1, tag: "fear" },
+            },
+          },
+        ],
+      },
     ],
 
     affinities: [],
-    talents: []
+    talents: [],
   },
 
   /* ───────────────────────────── Werewolf (STR) ──────────────────────────── */
@@ -387,24 +525,26 @@ export const seedCharacterClasses = [
     secondaryWeapons: ["Shortsword", "Light Axe", "Feral Fangblade", "Savage Paw"],
 
     defaultWeapon: "Iron Claws",
-    allowedWeapons: [
-      "Iron Claws","Dual Daggers","Shortsword","Light Axe","Feral Fangblade","Savage Paw",
-      "Claw Gauntlets","Beast Fangs","Dire Talons","Bloodclaw","Rendfangs"
-    ],
+    allowedWeapons: ["Iron Claws", "Dual Daggers", "Shortsword", "Light Axe", "Feral Fangblade", "Savage Paw", "Claw Gauntlets", "Beast Fangs", "Dire Talons", "Bloodclaw", "Rendfangs"],
 
-    // STR-leaning → físico + velocidad
+    // STR-leaning → físico (sin speed)
     passiveDefaultSkill: {
       enabled: true,
       name: "Lupine Frenzy",
       damageType: "physical",
-      shortDescEn: "+7 physical damage and +2 Attack Speed for 3 turns.",
-      longDescEn:
-        "On basic hits, may grant +7 physical damage and +2 Attack Speed for 3 turns. " +
-        "Chance = min(6 + Fate×1, 32). No stacking; refresh duration.",
-      trigger: { check: "onBasicHit", scaleBy: "fate", baseChancePercent: 6, fateScalePerPoint: 1, maxChancePercent: 32 },
+      shortDescEn: "+7 physical damage and +2 Critical Chance for 3 turns.",
+      longDescEn: "On basic hits, may grant +7 physical damage and +2 Critical Chance for 3 turns. " + "Chance = min(6 + Fate×1, 32). No stacking; refresh duration.",
+      trigger: {
+        check: "onBasicHit",
+        scaleBy: "fate",
+        baseChancePercent: 6,
+        fateScalePerPoint: 1,
+        maxChancePercent: 32,
+      },
       durationTurns: 3,
       bonusDamage: 7,
-      extraEffects: { attackSpeedFlat: 2 }
+      // ⬇️ reemplaza el antiguo attackSpeedFlat
+      extraEffects: { criticalChancePercent: 2 },
     },
 
     baseStats: {
@@ -416,20 +556,40 @@ export const seedCharacterClasses = [
       magicalDefense: 3,
       luck: 4,
       endurance: 8,
-      fate: 5
+      fate: 5,
     },
 
     resistances: {
-      fire: 4, ice: 4, lightning: 3, poison: 5, sleep: 3, paralysis: 6,
-      confusion: 6, fear: 5, dark: 4, holy: 2, stun: 5, bleed: 7, curse: 4,
-      knockback: 6, criticalChanceReduction: 3, criticalDamageReduction: 4
+      fire: 4,
+      ice: 4,
+      lightning: 3,
+      poison: 5,
+      sleep: 3,
+      paralysis: 6,
+      confusion: 6,
+      fear: 5,
+      dark: 4,
+      holy: 2,
+      stun: 5,
+      bleed: 7,
+      curse: 4,
+      knockback: 6,
+      criticalChanceReduction: 3,
+      criticalDamageReduction: 4,
     },
 
     combatStats: {
-      maxHP: 222, attackPower: 28, magicPower: 4,
-      criticalChance: 10, criticalDamageBonus: 30,
-      attackSpeed: 7, evasion: 8, blockChance: 3, blockValue: 5,
-      lifeSteal: 3, damageReduction: 6, movementSpeed: 7
+      maxHP: 222,
+      attackPower: 28,
+      magicPower: 4,
+      criticalChance: 10,
+      criticalDamageBonus: 30,
+      evasion: 8,
+      blockChance: 3,
+      blockValue: 5,
+      lifeSteal: 3,
+      damageReduction: 6,
+      movementSpeed: 7,
     },
 
     // Físico: Bleed plano
@@ -442,14 +602,20 @@ export const seedCharacterClasses = [
       cooldownTurns: 6,
       effects: {
         bonusDamagePercent: 65,
-        appliesDot: { tag: "bleed", damagePerTurn: 8, durationTurns: 3 }
+        appliesDot: { tag: "bleed", damagePerTurn: 8, durationTurns: 3 },
       },
       proc: {
         enabled: true,
         procInfoEn: "Turn start (≥3): Chance = min(5 + Fate×1, 15). Single use.",
-        trigger: { check: "onTurnStart", earliestTurn: 3, baseChancePercent: 5, fateScalePerPoint: 1, maxChancePercent: 15 },
-        respectCooldown: true
-      }
+        trigger: {
+          check: "onTurnStart",
+          earliestTurn: 3,
+          baseChancePercent: 5,
+          fateScalePerPoint: 1,
+          maxChancePercent: 15,
+        },
+        respectCooldown: true,
+      },
     },
 
     subclasses: [
@@ -463,15 +629,20 @@ export const seedCharacterClasses = [
             name: "Alpha Roar",
             description: "On Ultimate cast, +5 Attack Power for 2 turns.",
             trigger: { check: "onUltimateCast" },
-            effects: { buff: { attackPowerFlat: 5, durationTurns: 2 } }
+            effects: { buff: { attackPowerFlat: 5, durationTurns: 2 } },
           },
           {
             name: "Predator Instinct",
             description: "On Dodge, +5 Attack Power for 1 turn.",
-            trigger: { check: "onDodge", baseChancePercent: 100, fateScalePerPoint: 0, maxChancePercent: 100 },
-            effects: { buff: { attackPowerFlat: 5, durationTurns: 1 } }
-          }
-        ]
+            trigger: {
+              check: "onDodge",
+              baseChancePercent: 100,
+              fateScalePerPoint: 0,
+              maxChancePercent: 100,
+            },
+            effects: { buff: { attackPowerFlat: 5, durationTurns: 1 } },
+          },
+        ],
       },
       {
         name: "Berserker",
@@ -482,21 +653,32 @@ export const seedCharacterClasses = [
           {
             name: "Savage Wrath",
             description: "If HP < 50%, +10 damage dealt for this turn.",
-            trigger: { check: "onTurnStart", condition: "hpBelow50", baseChancePercent: 100, fateScalePerPoint: 0, maxChancePercent: 100 },
-            effects: { bonusPhysicalDamageFlat: 10 }
+            trigger: {
+              check: "onTurnStart",
+              condition: "hpBelow50",
+              baseChancePercent: 100,
+              fateScalePerPoint: 0,
+              maxChancePercent: 100,
+            },
+            effects: { bonusPhysicalDamageFlat: 10 },
           },
           {
             name: "Blood Frenzy",
             description: "On Hit, 20% chance to apply 1 Bleed stack (8 per turn, 2 turns).",
-            trigger: { check: "onHit", baseChancePercent: 20, fateScalePerPoint: 0, maxChancePercent: 20 },
-            effects: { dot: { tag: "bleed", damagePerTurn: 8, durationTurns: 2 } }
-          }
-        ]
-      }
+            trigger: {
+              check: "onHit",
+              baseChancePercent: 20,
+              fateScalePerPoint: 0,
+              maxChancePercent: 20,
+            },
+            effects: { dot: { tag: "bleed", damagePerTurn: 8, durationTurns: 2 } },
+          },
+        ],
+      },
     ],
 
     affinities: [],
-    talents: []
+    talents: [],
   },
 
   /* ───────────────────────────── Exorcist (INT) ──────────────────────────── */
@@ -510,10 +692,7 @@ export const seedCharacterClasses = [
     secondaryWeapons: ["Warhammer", "Morningstar", "Censer", "Cleric Staff"],
 
     defaultWeapon: "Holy Mace",
-    allowedWeapons: [
-      "Holy Mace","Flail","Warhammer","Morningstar","Censer","Cleric Staff",
-      "Consecrated Flail","Blessed Morningstar","Iron Censer","Divine Hammer","Sanctified Club"
-    ],
+    allowedWeapons: ["Holy Mace", "Flail", "Warhammer", "Morningstar", "Censer", "Cleric Staff", "Consecrated Flail", "Blessed Morningstar", "Iron Censer", "Divine Hammer", "Sanctified Club"],
 
     // INT-leaning → mágico defensivo
     passiveDefaultSkill: {
@@ -521,13 +700,17 @@ export const seedCharacterClasses = [
       name: "Hallowed Smite",
       damageType: "magical",
       shortDescEn: "+6 magic damage and +2 Block Chance for 3 turns.",
-      longDescEn:
-        "On hit or when being hit, may grant +6 magic damage and +2 Block Chance for 3 turns. " +
-        "Chance = min(7 + Fate×1, 34). No stacking; refresh duration.",
-      trigger: { check: "onHitOrBeingHit", scaleBy: "fate", baseChancePercent: 7, fateScalePerPoint: 1, maxChancePercent: 34 },
+      longDescEn: "On hit or when being hit, may grant +6 magic damage and +2 Block Chance for 3 turns. " + "Chance = min(7 + Fate×1, 34). No stacking; refresh duration.",
+      trigger: {
+        check: "onHitOrBeingHit",
+        scaleBy: "fate",
+        baseChancePercent: 7,
+        fateScalePerPoint: 1,
+        maxChancePercent: 34,
+      },
       durationTurns: 3,
       bonusDamage: 6,
-      extraEffects: { blockChanceFlat: 2 }
+      extraEffects: { blockChanceFlat: 2 },
     },
 
     baseStats: {
@@ -539,23 +722,43 @@ export const seedCharacterClasses = [
       magicalDefense: 7,
       luck: 5,
       endurance: 7,
-      fate: 5
+      fate: 5,
     },
 
     resistances: {
-      fire: 4, ice: 5, lightning: 4, poison: 3, sleep: 5, paralysis: 4,
-      confusion: 5, fear: 5, dark: 3, holy: 7, stun: 4, bleed: 3, curse: 7,
-      knockback: 4, criticalChanceReduction: 4, criticalDamageReduction: 4
+      fire: 4,
+      ice: 5,
+      lightning: 4,
+      poison: 3,
+      sleep: 5,
+      paralysis: 4,
+      confusion: 5,
+      fear: 5,
+      dark: 3,
+      holy: 7,
+      stun: 4,
+      bleed: 3,
+      curse: 7,
+      knockback: 4,
+      criticalChanceReduction: 4,
+      criticalDamageReduction: 4,
     },
 
     combatStats: {
-      maxHP: 230, attackPower: 16, magicPower: 26,
-      criticalChance: 8, criticalDamageBonus: 28,
-      attackSpeed: 4, evasion: 5, blockChance: 6, blockValue: 10,
-      lifeSteal: 0, damageReduction: 6, movementSpeed: 4
+      maxHP: 230,
+      attackPower: 16,
+      magicPower: 26,
+      criticalChance: 8,
+      criticalDamageBonus: 28,
+      evasion: 5,
+      blockChance: 6,
+      blockValue: 10,
+      lifeSteal: 0,
+      damageReduction: 6,
+      movementSpeed: 4,
     },
 
-    // Mágico: “Silence” 1 turno + toque utilitario (sin romper)
+    // Mágico: “Silence” 1 turno
     ultimateSkill: {
       enabled: true,
       name: "Sacred Judgement",
@@ -566,15 +769,27 @@ export const seedCharacterClasses = [
       effects: {
         bonusDamagePercent: 55,
         applies: [
-          { tag: "silence", stat: "ultimateLock", deltaFlat: 1, durationTurns: 1, resist: "holy" }
-        ]
+          {
+            tag: "silence",
+            stat: "ultimateLock",
+            deltaFlat: 1,
+            durationTurns: 1,
+            resist: "holy",
+          },
+        ],
       },
       proc: {
         enabled: true,
         procInfoEn: "Turn start (≥3): Chance = min(5 + Fate×1, 15). Single use.",
-        trigger: { check: "onTurnStart", earliestTurn: 3, baseChancePercent: 5, fateScalePerPoint: 1, maxChancePercent: 15 },
-        respectCooldown: true
-      }
+        trigger: {
+          check: "onTurnStart",
+          earliestTurn: 3,
+          baseChancePercent: 5,
+          fateScalePerPoint: 1,
+          maxChancePercent: 15,
+        },
+        respectCooldown: true,
+      },
     },
 
     subclasses: [
@@ -587,16 +802,22 @@ export const seedCharacterClasses = [
           {
             name: "Self-Discipline",
             description: "If HP < 50%, +5 Damage Reduction for 2 turns.",
-            trigger: { check: "onTurnStart", condition: "hpBelow50", baseChancePercent: 100, fateScalePerPoint: 0, maxChancePercent: 100 },
-            effects: { buff: { damageReductionFlat: 5, durationTurns: 2 } }
+            trigger: {
+              check: "onTurnStart",
+              condition: "hpBelow50",
+              baseChancePercent: 100,
+              fateScalePerPoint: 0,
+              maxChancePercent: 100,
+            },
+            effects: { buff: { damageReductionFlat: 5, durationTurns: 2 } },
           },
           {
             name: "Penitence",
             description: "Your first hit in battle deals +10 extra damage.",
             trigger: { check: "onFirstHit" },
-            effects: { bonusHolyDamageFlat: 10 }
-          }
-        ]
+            effects: { bonusHolyDamageFlat: 10 },
+          },
+        ],
       },
       {
         name: "Inquisitor",
@@ -607,20 +828,27 @@ export const seedCharacterClasses = [
           {
             name: "Sacred Mark",
             description: "On Hit, reduce target Defense by -5 for 1 turn.",
-            trigger: { check: "onHit", baseChancePercent: 100, fateScalePerPoint: 0, maxChancePercent: 100 },
-            effects: { debuff: { physicalDefenseFlat: -5, durationTurns: 1 } }
+            trigger: {
+              check: "onHit",
+              baseChancePercent: 100,
+              fateScalePerPoint: 0,
+              maxChancePercent: 100,
+            },
+            effects: {
+              debuff: { physicalDefenseFlat: -5, durationTurns: 1 },
+            },
           },
           {
             name: "Iron Faith",
             description: "+5 Block Chance permanently.",
             trigger: { check: "alwaysOn" },
-            effects: { permanent: { blockChanceFlat: 5 } }
-          }
-        ]
-      }
+            effects: { permanent: { blockChanceFlat: 5 } },
+          },
+        ],
+      },
     ],
 
     affinities: [],
-    talents: []
-  }
+    talents: [],
+  },
 ];

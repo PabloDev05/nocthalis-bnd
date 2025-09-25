@@ -13,32 +13,31 @@ import type { StatusKey } from "../../battleSystem/constants/status";
  * ────────────────────────────────────────────────────────────────────────── */
 
 export type BaseStats = {
-  strength: number;         // int
-  dexterity: number;        // int
-  intelligence: number;     // int
-  constitution: number;     // int  → contribuye a maxHP vía allocateCoeffs
-  physicalDefense: number;  // int (plano)
-  magicalDefense: number;   // int (plano)
-  luck: number;             // int (crit-related si lo deseas)
-  endurance: number;        // int (DR, block, etc. vía allocateCoeffs)
-  fate: number;             // int (driver para procs; no modifica combate directo)
+  strength: number; // int
+  dexterity: number; // int
+  intelligence: number; // int
+  constitution: number; // int  → contribuye a maxHP vía allocateCoeffs
+  physicalDefense: number; // int (plano)
+  magicalDefense: number; // int (plano)
+  luck: number; // int (crit-related si lo deseas)
+  endurance: number; // int (DR, block, etc. vía allocateCoeffs)
+  fate: number; // int (driver para procs; no modifica combate directo)
 };
 
 export type CombatStats = {
-  maxHP: number;            // int
-  attackPower: number;      // int
-  magicPower: number;       // int
+  maxHP: number; // int
+  attackPower: number; // int
+  magicPower: number; // int
 
   // Valores “tipo porcentaje”: SIEMPRE enteros 0..100. El motor los clamp/capea.
-  criticalChance: number;       // 0..100
-  criticalDamageBonus: number;  // 0..100 (ej. 35 = +35%)
-  attackSpeed: number;          // 0..100 (uso interno como “celeridad”)
-  evasion: number;              // 0..100
-  blockChance: number;          // 0..100
-  blockValue: number;           // int (valor plano de bloqueo)
-  lifeSteal: number;            // 0..100
-  damageReduction: number;      // 0..100
-  movementSpeed: number;        // 0..100
+  criticalChance: number; // 0..100
+  criticalDamageBonus: number; // 0..100 (ej. 35 = +35%)
+  evasion: number; // 0..100
+  blockChance: number; // 0..100
+  blockValue: number; // int (valor plano de bloqueo)
+  lifeSteal: number; // 0..100
+  damageReduction: number; // 0..100
+  movementSpeed: number; // 0..100
 };
 
 export type Resistances = Record<
@@ -65,19 +64,14 @@ export type Resistances = Record<
  * Fate-driven proc triggers (SOLO para passiveDefaultSkill y ultimate.proc)
  * ────────────────────────────────────────────────────────────────────────── */
 
-export type ProcTriggerCheck =
-  | "onBasicHit"
-  | "onRangedHit"
-  | "onSpellCast"
-  | "onHitOrBeingHit"
-  | "onTurnStart";
+export type ProcTriggerCheck = "onBasicHit" | "onRangedHit" | "onSpellCast" | "onHitOrBeingHit" | "onTurnStart";
 
 export interface ProcTrigger {
   check: ProcTriggerCheck;
-  scaleBy: "fate";           // estandarizamos: Fate impulsa las chances
+  scaleBy: "fate"; // estandarizamos: Fate impulsa las chances
   baseChancePercent: number; // int, ej. 7 => 7%
   fateScalePerPoint: number; // int, ej. 1 => +1% por punto de Fate
-  maxChancePercent: number;  // int, límite duro 0..100
+  maxChancePercent: number; // int, límite duro 0..100
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -91,12 +85,12 @@ export interface PassiveDefaultSkill {
   shortDescEn?: string;
   longDescEn?: string;
 
-  trigger: ProcTrigger;   // cuándo y cómo intenta procar (Fate-gated)
-  durationTurns: number;  // int, refresca si reaplica
+  trigger: ProcTrigger; // cuándo y cómo intenta procar (Fate-gated)
+  durationTurns: number; // int, refresca si reaplica
 
   // Efectos aditivos mientras está activa (enteros)
-  bonusDamage?: number;                     // int plano al daño base del golpe/hechizo
-  extraEffects?: Record<string, number>;    // ej: { evasionFlat: 2, magicPowerFlat: 3 }
+  bonusDamage?: number; // int plano al daño base del golpe/hechizo
+  extraEffects?: Record<string, number>; // ej: { evasionFlat: 2, magicPowerFlat: 3 }
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -109,17 +103,17 @@ export interface UltimateSkill {
   description?: string;
   cooldownTurns: number; // int ≥ 1
   effects: {
-    bonusDamagePercent?: number;      // int 0..100 (se aplica al daño base)
-    applyDebuff?: StatusKey;          // key del estado
-    debuffValue?: number;             // int (signo a criterio del estado)
-    bleedDamagePerTurn?: number;      // int plano por turno (si aplica)
-    debuffDurationTurns?: number;     // int ≥ 1
+    bonusDamagePercent?: number; // int 0..100 (se aplica al daño base)
+    applyDebuff?: StatusKey; // key del estado
+    debuffValue?: number; // int (signo a criterio del estado)
+    bleedDamagePerTurn?: number; // int plano por turno (si aplica)
+    debuffDurationTurns?: number; // int ≥ 1
   };
   proc?: {
     enabled: boolean;
-    procInfoEn?: string;              // texto de ayuda para UI
-    respectCooldown?: boolean;        // default true
-    trigger: ProcTrigger;             // típicamente onTurnStart (Fate-gated)
+    procInfoEn?: string; // texto de ayuda para UI
+    respectCooldown?: boolean; // default true
+    trigger: ProcTrigger; // típicamente onTurnStart (Fate-gated)
   };
 }
 
@@ -162,9 +156,9 @@ export interface CharacterClass {
   defaultWeapon: string;
   allowedWeapons: string[];
 
-  baseStats: BaseStats;        // incluye 'constitution' y 'fate'
-  resistances: Resistances;    // enteros 0..100
-  combatStats: CombatStats;    // enteros
+  baseStats: BaseStats; // incluye 'constitution' y 'fate'
+  resistances: Resistances; // enteros 0..100
+  combatStats: CombatStats; // enteros
 
   passiveDefaultSkill?: PassiveDefaultSkill | null;
   ultimateSkill?: UltimateSkill | null;

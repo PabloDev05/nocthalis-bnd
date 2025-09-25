@@ -4,12 +4,12 @@ export type BaseStats = {
   strength: number;
   dexterity: number;
   intelligence: number;
-  constitution: number;        
+  constitution: number;
   physicalDefense: number;
   magicalDefense: number;
   luck: number;
   endurance: number;
-  fate: number;                // requerido aquí (si querés, podés volverlo opcional)
+  fate: number; // requerido aquí (si querés, podés volverlo opcional)
 };
 
 export type CombatStats = {
@@ -19,15 +19,14 @@ export type CombatStats = {
   maxHP: number;
   attackPower: number;
   magicPower: number;
-  criticalChance: number;       // puntos %
-  criticalDamageBonus: number;  // puntos %
-  attackSpeed: number;          // puntos % (o ticks si tu motor lo interpreta así)
-  evasion: number;              // puntos %
-  blockChance: number;          // puntos %
-  blockValue: number;           // plano
-  lifeSteal: number;            // puntos %
-  damageReduction: number;      // puntos %
-  movementSpeed: number;        // puntos %
+  criticalChance: number; // puntos %
+  criticalDamageBonus: number; // puntos %
+  evasion: number; // puntos %
+  blockChance: number; // puntos %
+  blockValue: number; // plano
+  lifeSteal: number; // puntos %
+  damageReduction: number; // puntos %
+  movementSpeed: number; // puntos %
 };
 
 export type Passive = {
@@ -84,7 +83,7 @@ function sumModifiers(passives: Passive[]): { stats: PartialStats; combat: Parti
         "strength",
         "dexterity",
         "intelligence",
-        "constitution",      // ← actualizado
+        "constitution", // ← actualizado
         "physicalDefense",
         "magicalDefense",
         "luck",
@@ -97,22 +96,7 @@ function sumModifiers(passives: Passive[]): { stats: PartialStats; combat: Parti
     });
 
     // Stats de combate (enteros, % en puntos)
-    (
-      [
-        "maxHP",
-        "attackPower",
-        "magicPower",
-        "criticalChance",
-        "criticalDamageBonus",
-        "attackSpeed",
-        "evasion",
-        "blockChance",
-        "blockValue",
-        "lifeSteal",
-        "damageReduction",
-        "movementSpeed",
-      ] as const
-    ).forEach((k) => {
+    (["maxHP", "attackPower", "magicPower", "criticalChance", "criticalDamageBonus", "evasion", "blockChance", "blockValue", "lifeSteal", "damageReduction", "movementSpeed"] as const).forEach((k) => {
       const v = toInt((m as any)[k], 0);
       if (v) (combat as any)[k] = toInt(((combat as any)[k] ?? 0) + v, 0);
     });
@@ -143,15 +127,8 @@ function uniqueByKey(passives: Passive[]) {
 function resolveSubclass(classLike: CharacterClassLike | undefined, character: any): Subclass | undefined {
   if (!classLike?.subclasses?.length) return undefined;
 
-  const wantId = String(
-    character?.subclassId ??
-      character?.subclass?.id ??
-      character?.subclass?._id ??
-      ""
-  );
-  const wantSlug = String(
-    character?.subclassSlug ?? character?.subclass?.slug ?? ""
-  ).toLowerCase();
+  const wantId = String(character?.subclassId ?? character?.subclass?.id ?? character?.subclass?._id ?? "");
+  const wantSlug = String(character?.subclassSlug ?? character?.subclass?.slug ?? "").toLowerCase();
 
   if (!wantId && !wantSlug) return undefined;
 
@@ -215,9 +192,13 @@ export function collectPassivesForCharacter(character: any): Passive[] {
 
   const uniques = uniqueByKey(out);
   if (DBG) {
-    console.log("[PASSIVES] Colectadas:", uniques.map((p) => passiveKey(p)), {
-      names: uniques.map((p) => p.name),
-    });
+    console.log(
+      "[PASSIVES] Colectadas:",
+      uniques.map((p) => passiveKey(p)),
+      {
+        names: uniques.map((p) => p.name),
+      }
+    );
   }
   return uniques;
 }
@@ -252,7 +233,6 @@ export function applyPassivesToBlocks(baseStats: BaseStats, baseCombat: CombatSt
     // % en puntos → el runner lo convertirá a fracción si hace falta
     criticalChance: toInt((baseCombat.criticalChance ?? 0) + toInt(addC.criticalChance ?? 0)),
     criticalDamageBonus: toInt((baseCombat.criticalDamageBonus ?? 0) + toInt(addC.criticalDamageBonus ?? 0)),
-    attackSpeed: clampMin(toInt((baseCombat.attackSpeed ?? 0) + toInt(addC.attackSpeed ?? 0)), 0),
     evasion: toInt((baseCombat.evasion ?? 0) + toInt(addC.evasion ?? 0)),
     blockChance: toInt((baseCombat.blockChance ?? 0) + toInt(addC.blockChance ?? 0)),
     blockValue: clampMin(toInt((baseCombat.blockValue ?? 0) + toInt(addC.blockValue ?? 0)), 0),

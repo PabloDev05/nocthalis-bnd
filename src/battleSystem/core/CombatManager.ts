@@ -1,4 +1,5 @@
 // src/battleSystem/core/CombatManager.ts
+
 // PvP táctico con resistencias completas + eventos diferenciados:
 // - `dot_tick` para ticks de DoT (separado de `hit` normal).
 // - DoT tiquea al INICIO del turno del afectado.
@@ -6,16 +7,6 @@
 // - Daño elemental para mágicos con elemento (Exorcist→holy, Necromancer→dark).
 // - Crit chance y crit bonus mitigados por resistencias del defensor.
 // - Eventos: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast" | "dot_tick".
-
-// Si luego querés subir/bajar el impacto sin tocar el código, al instanciar el manager podés pasar:
-// new CombatManager(att, def, {
-//   globalDamageMult: 1.12,  // +12% global
-//   damageJitter: 0.25,      // más variación normal
-//   critMultiplierBase: 0.75, // +75% base
-//   critBonusAdd: 0.10,      // +10% extra
-//   critBonusMult: 1.10,     // +10% multiplicativo
-//   critJitter: 0.15,        // más variación en críticos
-// });
 
 import type { WeaponData } from "./Weapon";
 import { isPrimaryWeapon, PRIMARY_WEAPON_BONUS_MULT } from "./Weapon";
@@ -34,31 +25,36 @@ export interface ManagerOpts {
   /** Bonus de crítico base si el atacante no trae `criticalDamageBonus` (0.6 = +60%). */
   critMultiplierBase?: number;
 
-  /** Variación del daño base (±j sobre 1.0). 0.22 ⇒ factor uniformemente en [0.78..1.22] */
+  /** Variación del daño base (±j sobre 1.0). 0.22 ⇒ [0.78..1.22] */
   damageJitter?: number;
 
   /** 🔧 Aumenta levemente TODO el daño antes de DEF (p.ej. 1.08 = +8%). */
   globalDamageMult?: number;
 
   /** 🔧 “Perillas” para potenciar críticos de forma controlada (antes de mitigación): */
-  critBonusAdd?: number;   // suma directa al bonus (0.05 = +5% extra)
-  critBonusMult?: number;  // factor multiplicativo del bonus (1.05 = +5%)
+  critBonusAdd?: number;
+  critBonusMult?: number;
 
   /** Variación extra SOLO para golpes críticos. 0.08 ⇒ [0.92..1.08] */
   critJitter?: number;
+
+  /** (legacy) – ignorado; siempre 1 acción por turno. */
+  maxActionsPerBurst?: number;
+
+  /** 🔒 Piso relativo: el crítico SIEMPRE ≥ (dañoNormal * critMinFrac). Ej: 1.05 = +5% sobre el normal */
+  critMinFrac?: number;
+
+  /** 🔒 Techo relativo opcional para evitar picos: crítico ≤ (dañoNormal * critMaxFrac). Ej: 1.25 = +25% */
+  critMaxFrac?: number;
 }
 
 const DEBUG_MAN = false;
 
-// ───────── Balance ─────────
+// ───────── Balance (tuning) ─────────
 const OFFHAND_WEAPON_CONTRIB = 0.35;
 const OFFHAND_FOCUS_CONTRIB = 0.15;
 const SHIELD_BLOCK_BONUS = 0.05;
 const SHIELD_DR_BONUS = 0.03;
-
-const ATTACK_SPEED_BASE = 6; // 1 acción garantizada
-const ATTACK_SPEED_STEP = 3; // +3 AS ⇒ +1 acción
-const ATTACK_SPEED_CAP = 12;
 
 const PHYS_DEF_SOFTCAP = 40;
 const MAG_DEF_SOFTCAP = 40;
@@ -78,11 +74,10 @@ export interface PassiveTrigger {
   scaleBy: "fate";
   baseChancePercent: number;
   fateScalePerPoint: number;
-  maxChancePercent: number; // ignorado por cap global
+  maxChancePercent: number;
 }
 export interface PassiveExtraEffects {
   evasionFlat?: number;
-  attackSpeedFlat?: number;
   magicPowerFlat?: number;
   blockChancePercent?: number;
   criticalChancePercent?: number;
@@ -111,7 +106,7 @@ export interface UltimateTrigger {
   scaleBy: "fate";
   baseChancePercent: number;
   fateScalePerPoint: number;
-  maxChancePercent: number; // ignorado por cap global
+  maxChancePercent: number;
 }
 export type UltimateDebuff = "weaken" | "fear" | "silence" | "curse" | "bleed";
 export interface UltimateEffects {
@@ -163,7 +158,6 @@ function roll100(rng: () => number) {
 function normalizeEffects(e?: PassiveExtraEffects): Required<PassiveExtraEffects> {
   return {
     evasionFlat: asInt(e?.evasionFlat ?? 0),
-    attackSpeedFlat: asInt(e?.attackSpeedFlat ?? 0),
     magicPowerFlat: asInt(e?.magicPowerFlat ?? 0),
     blockChancePercent: asInt(e?.blockChancePercent ?? 0),
     criticalChancePercent: asInt(e?.criticalChancePercent ?? 0),
@@ -187,7 +181,13 @@ function applyOrRefreshPassiveRuntime(current: PassiveRuntime | null | undefined
     effects: normalizeEffects(cfg.extraEffects),
   };
   if (current?.active && current.remainingTurns > 0) {
-    return { runtime: { ...fresh, remainingTurns: Math.max(current.remainingTurns, fresh.remainingTurns) }, refreshed: true };
+    return {
+      runtime: {
+        ...fresh,
+        remainingTurns: Math.max(current.remainingTurns, fresh.remainingTurns),
+      },
+      refreshed: true,
+    };
   }
   return { runtime: fresh, refreshed: false };
 }
@@ -203,9 +203,8 @@ export interface CombatSide {
   currentHP: number;
 
   baseStats?: { [k: string]: number }; // Fate
-
-  stats?: Record<string, number>; // physicalDefense / magicalDefense
-  resistances?: Record<string, number>; // criticalChanceReduction / criticalDamageReduction / holy/dark/etc.
+  stats?: Record<string, number>;
+  resistances?: Record<string, number>;
   equipment?: Record<string, unknown>;
 
   combat: {
@@ -216,7 +215,6 @@ export interface CombatSide {
     damageReduction: number; // 0..1
     criticalChance: number; // 0..1
     criticalDamageBonus: number; // 0.5 => +50%
-    attackSpeed: number; // ticks
     maxHP?: number;
   };
 
@@ -266,13 +264,20 @@ export type CombatEvent =
           elementFactor?: number;
           jitterFactor: number;
           critMult: number;
+          /** multiplicador aplicado en el paso de bloqueo (1 - blockReduction) */
           blockFactor: number;
+          /** cuánto DR plano quedó al final */
           drFactor: number;
+          /** multiplicador de ulti aplicado antes de DEF */
           ultimatePreMult?: number;
-          /** NUEVO: multiplicador global aplicado antes de DEF */
+          /** multiplicador global antes de DEF */
           globalMult?: number;
-          /** NUEVO: jitter adicional de críticos (si hubo) */
+          /** jitter adicional en críticos */
           critJitterFactor?: number;
+
+          /** NUEVOS: para el log */
+          preBlock?: number; // daño antes del paso de bloqueo
+          blockedAmount?: number; // cantidad ABSOLUTA bloqueada
         };
       };
     }
@@ -312,8 +317,9 @@ export class CombatManager {
 
   private rng: () => number;
   private opts: Required<
-    Pick<ManagerOpts, "maxRounds" | "blockReduction" | "critMultiplierBase" | "damageJitter" | "globalDamageMult" | "critBonusAdd" | "critBonusMult" | "critJitter">
-  > & ManagerOpts;
+    Pick<ManagerOpts, "maxRounds" | "blockReduction" | "critMultiplierBase" | "damageJitter" | "globalDamageMult" | "critBonusAdd" | "critBonusMult" | "critJitter" | "critMinFrac" | "critMaxFrac">
+  > &
+    ManagerOpts;
 
   private rounds = 0;
   private dbgCount = 0;
@@ -325,25 +331,42 @@ export class CombatManager {
     this.player = attackerLike as CombatSide;
     this.enemy = defenderLike as CombatSide;
 
-    // Defaults afinados: más variación, críticos más “picantes”, y +8% daño global
+    // ⚙️ Defaults (balance suave + críticos acotados)
     const defaults = {
       maxRounds: 50,
       blockReduction: 0.5,
-      critMultiplierBase: 0.6, // antes 0.5 → +60% base si el atacante no trae bonus
-      damageJitter: 0.22,      // antes 0.15 → más dispersión en daño normal
-      globalDamageMult: 1.08,  // +8% de daño leve, antes de DEF
-      critBonusAdd: 0.05,      // +5% al bonus de crítico (antes de mitigación)
-      critBonusMult: 1.05,     // +5% multiplicativo al bonus
-      critJitter: 0.10,        // ±10% de variación extra solo en críticos
+      critMultiplierBase: 0.4,
+      damageJitter: 0.18,
+      globalDamageMult: 1.08,
+      critBonusAdd: 0.0,
+      critBonusMult: 0.92,
+      critJitter: 0.06,
+      critMinFrac: 1.05, // crítico mínimo +5% vs normal
+      critMaxFrac: 1.25, // crítico máximo +25% vs normal
     } as const;
 
     const provided: ManagerOpts = typeof optsOrSeed === "number" ? { seed: optsOrSeed } : optsOrSeed ?? {};
+
     this.rng = provided.rng ?? (typeof provided.seed === "number" ? makeSeededRng(provided.seed) : Math.random);
     this.opts = { ...defaults, ...provided };
 
     // Fallback a puños
-    this.player.weaponMain = this.player.weaponMain || { slug: "fists", minDamage: 1, maxDamage: 3, type: "physical", category: "weapon", hands: 1 };
-    this.enemy.weaponMain = this.enemy.weaponMain || { slug: "fists", minDamage: 1, maxDamage: 3, type: "physical", category: "weapon", hands: 1 };
+    this.player.weaponMain = this.player.weaponMain || {
+      slug: "fists",
+      minDamage: 1,
+      maxDamage: 3,
+      type: "physical",
+      category: "weapon",
+      hands: 1,
+    };
+    this.enemy.weaponMain = this.enemy.weaponMain || {
+      slug: "fists",
+      minDamage: 1,
+      maxDamage: 3,
+      type: "physical",
+      category: "weapon",
+      hands: 1,
+    };
 
     // Clamp HP
     this.player.currentHP = clamp(this.player.currentHP, 0, this.player.maxHP);
@@ -364,16 +387,11 @@ export class CombatManager {
   startRound(turn: number, onStart?: (s: { turn: number; playerHP: number; enemyHP: number }) => void) {
     if (turn % 2 === 1) this.rounds++;
 
-    // 1) Tick DoT al INICIO del turno del afectado
     const collect = (e: { actor: Side; victim: Side; key: "bleed" | "poison" | "burn"; dmg: number }) => {
       const victim = e.victim;
       if (victim === "player") this.player.currentHP = Math.max(0, this.player.currentHP - e.dmg);
       else this.enemy.currentHP = Math.max(0, this.enemy.currentHP - e.dmg);
-
-      // Si hay daño, despertar del sleep del VÍCTIMA
       this.SE.wakeIfDamaged(victim);
-
-      // Guardar evento separado (para VFX distinto)
       this.pendingStartEvents.push({
         type: "dot_tick",
         actor: e.actor,
@@ -386,11 +404,12 @@ export class CombatManager {
     this.SE.tickDots("player", "turnStart", collect);
     this.SE.tickDots("enemy", "turnStart", collect);
 
-    // 2) Decremento/expiración
     this.SE.onRoundStart(turn, () => {});
-
-    // 3) Aviso a UI
-    onStart?.({ turn, playerHP: this.player.currentHP, enemyHP: this.enemy.currentHP });
+    onStart?.({
+      turn,
+      playerHP: this.player.currentHP,
+      enemyHP: this.enemy.currentHP,
+    });
   }
 
   private endOfRoundTick() {
@@ -474,7 +493,6 @@ export class CombatManager {
   // ───────── Derivados con estados ─────────
   private withPassiveBuffs(side: CombatSide, owner: Side) {
     const base = {
-      attackSpeed: clamp(side.combat.attackSpeed, 1, ATTACK_SPEED_CAP),
       evasion: clamp01(num(side.combat.evasion, 0)),
       magicPower: Math.max(0, asInt(num(side.combat.magicPower, 0))),
       blockChance: clamp01(num(side.combat.blockChance, 0)),
@@ -484,7 +502,6 @@ export class CombatManager {
     let out =
       run?.active && run.remainingTurns > 0
         ? {
-            attackSpeed: Math.max(1, asInt(base.attackSpeed + (run.effects.attackSpeedFlat || 0))),
             evasion: clamp01(base.evasion + toFrac(run.effects.evasionFlat)),
             magicPower: Math.max(0, asInt(base.magicPower + (run.effects.magicPowerFlat || 0))),
             blockChance: clamp01(base.blockChance + toFrac(run.effects.blockChancePercent)),
@@ -492,8 +509,6 @@ export class CombatManager {
           }
         : base;
 
-    // Haste/shock del StatusEngine
-    out.attackSpeed = clamp(out.attackSpeed + this.SE.attackSpeedFlat(owner), 1, ATTACK_SPEED_CAP);
     return out;
   }
   private physDefEff(side: CombatSide, owner: Side): number {
@@ -504,8 +519,8 @@ export class CombatManager {
     return Math.max(0, num(side.stats?.["magicalDefense"], 0));
   }
   private critChanceReductionEff(owner: Side, side: CombatSide): number {
-    const res = toFrac(side.resistances?.["criticalChanceReduction"]); // del defensor
-    const extra = this.SE.critChanceReductionFrac(owner); // fear activo
+    const res = toFrac(side.resistances?.["criticalChanceReduction"]);
+    const extra = this.SE.critChanceReductionFrac(owner);
     return clamp01(res + extra);
   }
   private atkPowerEff(owner: Side, side: CombatSide): number {
@@ -520,41 +535,24 @@ export class CombatManager {
     return this.SE.silenced(owner);
   }
 
-  // ───────── AttackSpeed → nº de acciones ─────────
-  private targetGuaranteedActions(attackSpeedEff: number) {
-    const as = clamp(attackSpeedEff, 1, ATTACK_SPEED_CAP);
-    if (as <= ATTACK_SPEED_BASE) return 1;
-    const delta = as - ATTACK_SPEED_BASE;
-    return 1 + Math.floor(delta / ATTACK_SPEED_STEP);
-  }
-  private targetFractionChance(attackSpeedEff: number) {
-    const as = clamp(attackSpeedEff, 1, ATTACK_SPEED_CAP);
-    if (as <= ATTACK_SPEED_BASE) return 0;
-    const delta = as - ATTACK_SPEED_BASE;
-    return clamp01((delta % ATTACK_SPEED_STEP) / ATTACK_SPEED_STEP);
-  }
-
-  // ───────── Burst con ulti + eventos de DoT previos ─────────
+  // ───────── Burst SIN attack speed (siempre 1 acción) ─────────
   private performBurst(attackerKey: SideKey, defenderKey: SideKey): AttackOutput {
-    const A = attackerKey === "player" ? this.player : this.enemy;
-    const ASide: Side = attackerKey;
-
-    // 1) Emitir primero los ticks de DoT encolados (turnStart)
     const events: CombatEvent[] = this.pendingStartEvents.splice(0);
     if (this.isCombatOver()) return { damage: 0, flags: { miss: false }, events, extra: { actions: 0, strikes: [] } };
 
-    // 2) Si está CC duro, no actúa
     const strikes: Array<{ damage: number; flags: AttackFlags }> = [];
     let totalDamage = 0;
     let actions = 0;
-    let fractionalRolled = false;
+
+    const A = attackerKey === "player" ? this.player : this.enemy;
+    const ASide: Side = attackerKey;
 
     if (this.SE.cannotAct(ASide)) {
       events.push({ type: "miss", actor: attackerKey });
       return { damage: 0, flags: { miss: true }, events, extra: { actions: 0, strikes } };
     }
 
-    // 3) Intento de Ultimate (si procede)
+    // 1) Ultimate (opcional).
     const maybeUlt = this.tryUltimateCast(attackerKey, defenderKey, events);
     if (maybeUlt) {
       actions++;
@@ -563,37 +561,11 @@ export class CombatManager {
       if (this.isCombatOver()) return { damage: totalDamage, flags: { miss: false }, events, extra: { actions, strikes } };
     }
 
-    // 4) Golpes por AttackSpeed
-    while (!this.isCombatOver()) {
-      const eff = this.withPassiveBuffs(A, ASide);
-      const guaranteedTarget = this.targetGuaranteedActions(eff.attackSpeed);
-
-      if (this.SE.paralysisSkip(ASide)) {
-        events.push({ type: "miss", actor: attackerKey });
-        actions++;
-        continue;
-      }
-
-      if (actions < guaranteedTarget) {
-        const out = this.performSingleStrike(attackerKey, defenderKey, events, undefined);
-        actions++;
-        strikes.push({ damage: out.damage, flags: out.flags });
-        totalDamage += out.damage;
-        continue;
-      }
-
-      if (!fractionalRolled) {
-        const chance = this.targetFractionChance(eff.attackSpeed);
-        if (this.rng() < chance) {
-          const out = this.performSingleStrike(attackerKey, defenderKey, events, undefined);
-          actions++;
-          strikes.push({ damage: out.damage, flags: out.flags });
-          totalDamage += out.damage;
-        }
-        fractionalRolled = true;
-      }
-      break;
-    }
+    // 2) 1 golpe básico por turno.
+    const out = this.performSingleStrike(attackerKey, defenderKey, events, undefined);
+    actions++;
+    strikes.push({ damage: out.damage, flags: out.flags });
+    totalDamage += out.damage;
 
     const anyCrit = strikes.some((s) => s.flags.crit);
     const anyBlocked = strikes.some((s) => s.flags.blocked);
@@ -614,7 +586,6 @@ export class CombatManager {
     };
   }
 
-  // Ulti con respeto de silence/CD + debuffs
   private tryUltimateCast(attackerKey: SideKey, defenderKey: SideKey, events: CombatEvent[]): AttackOutput | null {
     const A = attackerKey === "player" ? this.player : this.enemy;
     const ASide: Side = attackerKey;
@@ -637,7 +608,10 @@ export class CombatManager {
     events.push({ type: "ultimate_cast", actor: attackerKey, name: cfg.name });
 
     const mult = 1 + Math.max(0, num(cfg.effects?.bonusDamagePercent, 0)) / 100;
-    return this.performSingleStrike(attackerKey, defenderKey, events, { ultimatePreMult: mult, ultimateEffects: cfg.effects });
+    return this.performSingleStrike(attackerKey, defenderKey, events, {
+      ultimatePreMult: mult,
+      ultimateEffects: cfg.effects,
+    });
   }
 
   // Golpe atómico
@@ -647,7 +621,12 @@ export class CombatManager {
     events: CombatEvent[],
     opts?: {
       ultimatePreMult?: number;
-      ultimateEffects?: { applyDebuff?: "weaken" | "fear" | "silence" | "curse" | "bleed"; debuffValue?: number; debuffDurationTurns?: number; bleedDamagePerTurn?: number };
+      ultimateEffects?: {
+        applyDebuff?: "weaken" | "fear" | "silence" | "curse" | "bleed";
+        debuffValue?: number;
+        debuffDurationTurns?: number;
+        bleedDamagePerTurn?: number;
+      };
     }
   ): AttackOutput {
     const A = attackerKey === "player" ? this.player : this.enemy;
@@ -662,7 +641,6 @@ export class CombatManager {
     const Aeff = this.withPassiveBuffs(A, ASide);
     const Deff = this.withPassiveBuffs(D, DSide);
 
-    // Confusión: auto-fallo
     if (this.SE.confusionMiss(ASide)) {
       events.push({ type: "miss", actor: attackerKey });
       return { damage: 0, flags: { miss: true } };
@@ -688,7 +666,7 @@ export class CombatManager {
     const isCrit = this.rng() < critChanceEff;
     if (isCrit) events.push({ type: "crit", actor: attackerKey });
 
-    // 4) Arma principal (+bonus si primaria)
+    // 4) Arma principal
     let mainRoll = this.rollWeapon(A.weaponMain);
     if (isPrimaryWeapon(A.weaponMain, A.classMeta?.primaryWeapons)) mainRoll = Math.floor(mainRoll * PRIMARY_WEAPON_BONUS_MULT);
 
@@ -701,10 +679,10 @@ export class CombatManager {
       else if (cat === "focus") offRollPart = Math.floor(r * OFFHAND_FOCUS_CONTRIB);
     }
 
-    // 6) Stat base por flavor (curse/rage afectan ATK)
+    // 6) Stat base
     const baseStat = flavor === "magical" ? Math.max(0, asInt(Aeff.magicPower)) : this.atkPowerEff(ASide, A);
 
-    // 7) Bonus de pasiva (si coincide flavor)
+    // 7) Bonus de pasiva
     let passiveBonus = 0;
     if (A._passiveRuntime__?.active && A._passiveRuntime__?.remainingTurns > 0) {
       if (A.passiveDefaultSkill?.damageType === flavor) passiveBonus = Math.max(0, asInt(A._passiveRuntime__?.bonusDamage || 0));
@@ -717,18 +695,18 @@ export class CombatManager {
     const ultimatePreMult = Math.max(1, num(opts?.ultimatePreMult, 1));
     baseSum = Math.floor(baseSum * ultimatePreMult);
 
-    // 8.2) 🔧 Multiplicador global antes de DEF (aplica a todo: arma+stat+pasiva)
+    // 8.2) Global
     const globalMult = Math.max(0.5, num(this.opts.globalDamageMult, 1));
     baseSum = Math.floor(baseSum * globalMult);
 
-    // 9) Mitigación por DEF (softcap)
+    // 9) DEF (softcap)
     const physDef = this.physDefEff(D, DSide);
     const magDef = this.magDefEff(D);
     const defDR = flavor === "magical" ? (magDef > 0 ? magDef / (magDef + MAG_DEF_SOFTCAP) : 0) : physDef > 0 ? physDef / (physDef + PHYS_DEF_SOFTCAP) : 0;
     const defenseFactor = clamp01(1 - defDR);
     let after = Math.floor(baseSum * defenseFactor);
 
-    // 9.5) Mitigación elemental del DEFENSOR (holy/dark)
+    // 9.5) Elemental
     let elementFactor = 1;
     const elemKey = this.elementKeyForAttack(A, flavor);
     if (elemKey) {
@@ -737,43 +715,50 @@ export class CombatManager {
       after = Math.floor(after * elementFactor);
     }
 
-    // 10) Jitter general
-    const j = clamp01(num(this.opts.damageJitter, 0.22));
+    // 10) Jitter normal
+    const j = clamp01(num(this.opts.damageJitter, 0.18));
     const jitterFactor = 1 - j + this.rng() * (2 * j);
     after = Math.floor(after * jitterFactor);
 
-    // 11) Crítico (bonus + knobs + mitigación), con jitter extra en críticos
+    // === Snapshot del daño SIN crítico para acotar el crítico ===
+    const preCritBase = after;
+
+    // 11) Crítico
     let critMult = 1;
     let critJitterFactor: number | undefined = undefined;
     if (isCrit) {
-      // Bonus base del atacante (puede venir en fracción o puntos %)
       const raw = num(A.combat.criticalDamageBonus, this.opts.critMultiplierBase);
-      const baseBonus = raw > 1 ? toFrac(raw) : raw; // 35 → 0.35 ; 0.35 → 0.35
-
-      // Tuning global ANTES de mitigar
-      const tunedBonus = Math.max(0, baseBonus * num(this.opts.critBonusMult, 1) + num(this.opts.critBonusAdd, 0));
-
-      // Mitigación del defensor
+      const baseBonus = raw > 1 ? toFrac(raw) : raw;
+      const tunedBonus = Math.max(0, baseBonus * num(this.opts.critBonusMult, 0.92) + num(this.opts.critBonusAdd, 0.0));
       const critDmgRed = toFrac(D.resistances?.["criticalDamageReduction"]);
       const effBonus = Math.max(0, tunedBonus - critDmgRed);
-
       critMult = 1 + effBonus;
+
       after = Math.floor(after * critMult);
 
-      // Jitter extra SOLO para críticos
-      const cj = clamp01(num(this.opts.critJitter, 0.1));
+      const cj = clamp01(num(this.opts.critJitter, 0.06));
       critJitterFactor = 1 - cj + this.rng() * (2 * cj);
       after = Math.floor(after * critJitterFactor);
+
+      // 🔒 Asegurar: CRIT ≥ normal * critMinFrac  (y opcional techo)
+      const minFrac = Math.max(1, num(this.opts.critMinFrac, 1.05));
+      const maxFrac = Math.max(minFrac, num(this.opts.critMaxFrac, 1.25));
+      const floorVal = Math.floor(preCritBase * minFrac);
+      const ceilVal = Math.floor(preCritBase * maxFrac);
+      if (after < floorVal) after = floorVal;
+      if (after > ceilVal) after = ceilVal;
     }
 
-    // 12) Block
+    // 12) Block (guardamos preBlock y blockedAmount)
     let blockFactor = 1;
+    const preBlock = after;
     if (blocked) {
       blockFactor = 1 - this.opts.blockReduction;
       after = Math.floor(after * blockFactor);
     }
+    const blockedAmount = Math.max(0, preBlock - after);
 
-    // 13) DR plana + escudo + estados (fortify/shield)
+    // 13) DR plano + escudo + estados
     const drBase = clamp01(num(D.combat.damageReduction, 0));
     const drFromShield = defHasShield ? SHIELD_DR_BONUS : 0;
     const drFromStatuses = clamp01(this.drBonusEff(DSide));
@@ -781,13 +766,12 @@ export class CombatManager {
     const drFactor = 1 - dr;
     after = Math.floor(after * drFactor);
 
-    // 14) Aplicar daño
+    // 14) Aplicar
     const finalDmg = Math.max(0, asInt(after));
     D.currentHP = Math.max(0, D.currentHP - finalDmg);
-
     if (finalDmg > 0) this.SE.wakeIfDamaged(DSide);
 
-    // 15) Evento de hit (ACTIVO)
+    // 15) Evento
     events.push({
       type: "hit",
       actor: attackerKey,
@@ -809,6 +793,8 @@ export class CombatManager {
           ultimatePreMult: Number(ultimatePreMult.toFixed(2)),
           globalMult: Number(globalMult.toFixed(2)),
           ...(critJitterFactor != null ? { critJitterFactor: Number(critJitterFactor.toFixed(3)) } : {}),
+          preBlock,
+          blockedAmount,
         },
       },
     });
@@ -826,7 +812,17 @@ export class CombatManager {
         result = refreshed ? "refreshed" : "activated";
         remaining = runtime.remainingTurns;
       }
-      events.push({ type: "passive_proc", actor: who, name: cfg.name, trigger: cfg.trigger.check, chancePercent: chance, roll, result, remainingTurns: remaining, duration: cfg.durationTurns });
+      events.push({
+        type: "passive_proc",
+        actor: who,
+        name: cfg.name,
+        trigger: cfg.trigger.check,
+        chancePercent: chance,
+        roll,
+        result,
+        remainingTurns: remaining,
+        duration: cfg.durationTurns,
+      });
     };
     if (A.passiveDefaultSkill?.enabled) {
       const trig = A.passiveDefaultSkill.trigger.check;
@@ -839,7 +835,7 @@ export class CombatManager {
       pushPassiveEvent(defenderKey, D, fateD, "onHitOrBeingHit");
     }
 
-    // 17) Debuffs de la Ultimate (tras el daño)
+    // 17) Debuffs de la Ultimate
     if (opts?.ultimateEffects?.applyDebuff) {
       const eff = opts.ultimateEffects;
       const dur = Math.max(1, asInt(eff.debuffDurationTurns ?? STATUS_CATALOG[eff.applyDebuff!]?.baseDuration ?? 1));

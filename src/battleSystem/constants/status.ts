@@ -25,7 +25,6 @@ export const STATUS_KEYS = [
   "silence",
 
   // Generic buffs
-  "haste",
   "shield",
   "rage",
   "fortify",
@@ -192,16 +191,6 @@ export const STATUS_CATALOG: Record<StatusKey, StatusDef> = {
   },
 
   // ───── Buffs ─────
-  haste: {
-    key: "haste",
-    kind: "buff",
-    name: "Haste",
-    description: "Increases Attack Speed.",
-    tags: ["speed"],
-    baseDuration: 2,
-    affects: ["attackSpeed"],
-  },
-
   shield: {
     key: "shield",
     kind: "buff",
@@ -247,8 +236,8 @@ export function getStatusDef(key: StatusKey): StatusDef {
 /** Instancia de estado que usa el runner/snapshots. */
 export interface StatusInstance {
   key: StatusKey;
-  stacks: number;     // entero ≥ 1 (si stackea)
-  turnsLeft: number;  // entero ≥ 0
+  stacks: number; // entero ≥ 1 (si stackea)
+  turnsLeft: number; // entero ≥ 0
 }
 
 /** Enteriza/limita stacks a [1..maxStacks] (o 1 si no stackea). */
@@ -267,11 +256,7 @@ export function defaultDuration(key: StatusKey): number {
 }
 
 /** Crea una instancia normalizada (enteros) lista para aplicar. */
-export function makeStatusInstance(
-  key: StatusKey,
-  stacks?: number,
-  durationTurns?: number
-): StatusInstance {
+export function makeStatusInstance(key: StatusKey, stacks?: number, durationTurns?: number): StatusInstance {
   const s = clampStacks(key, stacks ?? 1);
   const t = Math.max(0, Math.trunc(durationTurns ?? defaultDuration(key)));
   return { key, stacks: s, turnsLeft: t };
@@ -279,17 +264,7 @@ export function makeStatusInstance(
 
 /* Listas útiles para lógica rápida en el runner/UI */
 export const DOT_STATUS: Readonly<StatusKey[]> = ["burn", "poison", "bleed"];
-export const CONTROL_STATUS: Readonly<StatusKey[]> = [
-  "freeze",
-  "shock",
-  "stun",
-  "sleep",
-  "paralysis",
-  "confusion",
-  "fear",
-  "knockback",
-  "silence",
-];
+export const CONTROL_STATUS: Readonly<StatusKey[]> = ["freeze", "shock", "stun", "sleep", "paralysis", "confusion", "fear", "knockback", "silence"];
 
 /**
  * 📌 Notas de mapeo (según seed/ultimates):

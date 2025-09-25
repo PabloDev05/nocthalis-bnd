@@ -37,9 +37,9 @@ export const STATUS_DEFAULTS = {
   fortifyPct: 5,
   shieldPct: 8,
 
-  fearPP: 10,     // puntos porcentuales de reducción de crítico
-  hasteFlat: 2,   // +AS por stack
-  shockFlat: -2,  // -AS por stack
+  fearPP: 10, // puntos porcentuales de reducción de crítico
+  hasteFlat: 2, // +AS por stack
+  shockFlat: -2, // -AS por stack
 } as const;
 
 export interface StatusInstance {
@@ -47,7 +47,7 @@ export interface StatusInstance {
   stacks: number;
   turnsLeft: number; // rondas
   source?: Side;
-  value?: number;     // magnitud por stack (fear/curse/etc.)
+  value?: number; // magnitud por stack (fear/curse/etc.)
   dotDamage?: number; // dps por stack (DoT)
 }
 
@@ -227,10 +227,7 @@ export class StatusEngine {
       const res = clamp(this.getResistance(victim, key) || 0, 0, 100);
       const resFactor = Math.max(0, 1 - res / 100);
 
-      const fallback =
-        key === "bleed" ? STATUS_DEFAULTS.bleedPerStack :
-        key === "poison" ? STATUS_DEFAULTS.poisonPerStack :
-        STATUS_DEFAULTS.burnPerStack;
+      const fallback = key === "bleed" ? STATUS_DEFAULTS.bleedPerStack : key === "poison" ? STATUS_DEFAULTS.poisonPerStack : STATUS_DEFAULTS.burnPerStack;
 
       const perStack = inst.dotDamage ?? fallback;
       const raw = Math.max(0, toInt(perStack) * Math.max(1, inst.stacks));
@@ -245,13 +242,7 @@ export class StatusEngine {
   }
 
   // ───────────────── Modificadores consultables ─────────────────
-  public attackSpeedFlat(side: Side): number {
-    const haste = this.states[side].get("haste");
-    const shock = this.states[side].get("shock");
-    const hasteVal = (haste?.value ?? STATUS_DEFAULTS.hasteFlat) * (haste?.stacks ?? 0);
-    const shockVal = (shock?.value ?? STATUS_DEFAULTS.shockFlat) * (shock?.stacks ?? 0);
-    return toInt(hasteVal + shockVal, 0);
-  }
+
   public critChanceReductionFrac(side: Side): number {
     const fear = this.states[side].get("fear");
     if (!fear) return 0;

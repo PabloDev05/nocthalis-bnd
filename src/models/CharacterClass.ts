@@ -50,7 +50,6 @@ export type CombatStats = {
 
   criticalChance: number;
   criticalDamageBonus: number;
-  attackSpeed: number;
   evasion: number;
   blockChance: number;
   blockValue: number;
@@ -190,7 +189,6 @@ const CombatStatsSchema = new Schema<CombatStats>(
 
     criticalChance: { type: Number, required: true, default: 0, set: I0 },
     criticalDamageBonus: { type: Number, required: true, default: 0, set: I0 },
-    attackSpeed: { type: Number, required: true, default: 0, set: I0 },
     evasion: { type: Number, required: true, default: 0, set: I0 },
     blockChance: { type: Number, required: true, default: 0, set: I0 },
     blockValue: { type: Number, required: true, default: 0, set: I0 },

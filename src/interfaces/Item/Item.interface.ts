@@ -26,7 +26,6 @@ export type CombatKey =
   | "magicPower"
   | "criticalChance"
   | "criticalDamageBonus"
-  | "attackSpeed"
   | "evasion"
   | "blockChance"
   | "blockValue"

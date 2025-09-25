@@ -12,14 +12,7 @@ export type AbilityKind = "passive" | "ultimate";
 export interface TimelineEntry {
   turn: number;
   source: "attacker" | "defender";
-  event:
-    | "hit"
-    | "crit"
-    | "block"
-    | "miss"
-    | "passive_proc"
-    | "ultimate_cast"
-    | "dot_tick"; // ← añadido para DoT ticks
+  event: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast" | "dot_tick"; // ← añadido para DoT ticks
   damage: number;
   attackerHP: number;
   defenderHP: number;
@@ -61,12 +54,11 @@ export interface CharacterSnapshot {
     maxHP: number;
     attackPower: number;
     magicPower: number;
-    evasion: number;              // 0..100
-    blockChance: number;          // 0..100
-    damageReduction: number;      // 0..100
-    criticalChance: number;       // 0..100
-    criticalDamageBonus: number;  // 0..100
-    attackSpeed: number;          // >= 1
+    evasion: number; // 0..100
+    blockChance: number; // 0..100
+    damageReduction: number; // 0..100
+    criticalChance: number; // 0..100
+    criticalDamageBonus: number; // 0..100
   };
   currentHP: number;
 }
@@ -126,8 +118,6 @@ const SnapshotSchema = new Schema<CharacterSnapshot>(
       damageReduction: { type: Number, required: true, set: i, min: 0, max: 100 },
       criticalChance: { type: Number, required: true, set: i, min: 0, max: 100 },
       criticalDamageBonus: { type: Number, required: true, set: i, min: 0, max: 100 },
-
-      attackSpeed: { type: Number, required: true, set: i, min: 1 },
     },
 
     currentHP: { type: Number, required: true, min: 0, set: i },
@@ -288,10 +278,7 @@ MatchSchema.index({ mode: 1, createdAt: -1 });
 MatchSchema.index({ seed: 1 });
 
 /** Unicidad “suave” por atacante+clientKey para idempotencia */
-MatchSchema.index(
-  { attackerUserId: 1, clientKey: 1 },
-  { unique: true, partialFilterExpression: { clientKey: { $type: "string" } } }
-);
+MatchSchema.index({ attackerUserId: 1, clientKey: 1 }, { unique: true, partialFilterExpression: { clientKey: { $type: "string" } } });
 
 export const Match: Model<MatchDoc> = model<MatchDoc>("Match", MatchSchema);
 export type { MatchDoc as TMatchDoc };

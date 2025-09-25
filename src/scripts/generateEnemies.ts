@@ -55,7 +55,6 @@ export interface SeedEnemy {
     magicPower: number;
     criticalChance: number; // %
     criticalDamageBonus: number; // % (extra sobre base)
-    attackSpeed: number; // ticks/turn o tu unidad actual
     evasion: number; // %
     blockChance: number; // %
     blockValue: number; // valor plano
@@ -193,7 +192,6 @@ function derivedCombat(level: number, arche: ArchetypeKey, stats: SeedEnemy["sta
 
   let criticalChance = 3 + stats.luck * 0.8 + stats.dexterity * 0.2;
   let criticalDamageBonus = 20 + level * 1.2;
-  let attackSpeed = 4 + stats.dexterity / 2;
   let evasion = 3 + stats.dexterity * 0.8;
   let blockChance = (stats.physicalDefense + stats.endurance) / 8;
   let blockValue = (stats.physicalDefense + stats.constitution) / 3;
@@ -208,7 +206,6 @@ function derivedCombat(level: number, arche: ArchetypeKey, stats: SeedEnemy["sta
   magicPower = jitterInt(rnd, magicPower, J);
   criticalChance = jitterInt(rnd, criticalChance, J);
   criticalDamageBonus = jitterInt(rnd, criticalDamageBonus, J);
-  attackSpeed = jitterInt(rnd, attackSpeed, J);
   evasion = jitterInt(rnd, evasion, J);
   blockChance = jitterInt(rnd, blockChance, J);
   blockValue = jitterInt(rnd, blockValue, J);
@@ -222,7 +219,6 @@ function derivedCombat(level: number, arche: ArchetypeKey, stats: SeedEnemy["sta
     magicPower: clamp(magicPower, 0, 999),
     criticalChance: clamp(criticalChance, 0, 40),
     criticalDamageBonus: clamp(criticalDamageBonus, 20, 60),
-    attackSpeed: clamp(attackSpeed, 1, 12),
     evasion: clamp(evasion, 0, 25),
     blockChance: clamp(blockChance, 0, 18),
     blockValue: clamp(blockValue, 0, 24),

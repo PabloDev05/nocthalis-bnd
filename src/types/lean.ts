@@ -43,7 +43,6 @@ export type CombatStats = {
   magicPower: number;
   criticalChance: number;
   criticalDamageBonus: number;
-  attackSpeed: number;
   evasion: number;
   blockChance: number;
   blockValue: number;

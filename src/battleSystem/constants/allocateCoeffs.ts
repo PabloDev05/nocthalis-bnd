@@ -14,7 +14,6 @@ export type AllocateDelta = {
     blockChance: number;
     criticalChance: number;
     criticalDamageBonus: number;
-    attackSpeed: number;
   }>;
 };
 
@@ -24,7 +23,7 @@ export type AllocateCoeffs = Record<PrimaryKey, AllocateDelta>;
 
 export const GLOBAL_ALLOCATE_COEFFS: AllocateCoeffs = {
   strength: { combat: { attackPower: 1 } },
-  dexterity: { combat: { evasion: 1, attackSpeed: 1 } },
+  dexterity: { combat: { evasion: 1 } },
   intelligence: { combat: { magicPower: 1 } },
   constitution: { combat: { maxHP: 10, blockChance: 1 } },
   endurance: { combat: { damageReduction: 1 } },
@@ -37,9 +36,9 @@ export const GLOBAL_ALLOCATE_COEFFS: AllocateCoeffs = {
 export const CLASS_ALLOCATE_OVERRIDES: Record<string, Partial<AllocateCoeffs>> = {
   Werewolf: { strength: { combat: { attackPower: 2 } } },
   Vampire: { luck: { combat: { criticalChance: 2, criticalDamageBonus: 2 } } },
-  Revenant: { dexterity: { combat: { criticalChance: 2, evasion: 1 } } },
+  Revenant: { dexterity: { combat: { criticalChance: 2, attackPower: 1 } } },
   Necromancer: { intelligence: { combat: { magicPower: 2 } } },
-  Exorcist: { intelligence: { combat: { magicPower: 2 } } },
+  Exorcist: { intelligence: { combat: { magicPower: 2, damageReduction: 1 } } },
 };
 
 export function getAllocateCoeffsForClass(className?: string): AllocateCoeffs {

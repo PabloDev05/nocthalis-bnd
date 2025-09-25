@@ -20,8 +20,6 @@ const CAPS = {
   damageReduction: 60,
   criticalChance: 50,
   criticalDamageBonus: 300,
-  attackSpeedMin: 3,
-  attackSpeedMax: 12,
 };
 
 /* ── claves/alias ── */
@@ -104,7 +102,6 @@ function applyCombatDeltaFromInc(ctx: { userId?: string; charId?: string; classN
     blockChance: 0,
     criticalChance: 0,
     criticalDamageBonus: 0,
-    attackSpeed: 0,
   };
 
   // console.log(tag(ctx), "applyCombatDeltaFromInc inc=", j(inc), "className=", className || "-");
@@ -147,7 +144,6 @@ function applyCombatDeltaFromInc(ctx: { userId?: string; charId?: string; classN
     blockChance: toInt(next.blockChance ?? 0),
     criticalChance: toInt(next.criticalChance ?? 0),
     criticalDamageBonus: toInt(next.criticalDamageBonus ?? 0),
-    attackSpeed: toInt(next.attackSpeed ?? 0),
   };
 
   next.evasion = clamp(bump(next.evasion, delta.evasion), 0, CAPS.evasion);
@@ -156,19 +152,12 @@ function applyCombatDeltaFromInc(ctx: { userId?: string; charId?: string; classN
   next.criticalChance = clamp(bump(beforePct.criticalChance, delta.criticalChance), 0, CAPS.criticalChance);
   next.criticalDamageBonus = clamp(bump(next.criticalDamageBonus, delta.criticalDamageBonus), 0, CAPS.criticalDamageBonus);
 
-  if (delta.attackSpeed !== 0) {
-    next.attackSpeed = clamp(bump(next.attackSpeed, delta.attackSpeed), CAPS.attackSpeedMin, CAPS.attackSpeedMax);
-  } else {
-    next.attackSpeed = toInt(next.attackSpeed ?? 0, 0);
-  }
-
   const afterPct = {
     evasion: toInt(next.evasion ?? 0),
     damageReduction: toInt(next.damageReduction ?? 0),
     blockChance: toInt(next.blockChance ?? 0),
     criticalChance: toInt(next.criticalChance ?? 0),
     criticalDamageBonus: toInt(next.criticalDamageBonus ?? 0),
-    attackSpeed: toInt(next.attackSpeed ?? 0),
   };
 
   // console.log(

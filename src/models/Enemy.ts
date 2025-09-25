@@ -172,7 +172,6 @@ const EnemySchema = new Schema<EnemyDoc>(
       magicPower: { type: Number, default: 0 },
       criticalChance: { type: Number, default: 0 },
       criticalDamageBonus: { type: Number, default: 0 },
-      attackSpeed: { type: Number, default: 0 },
       evasion: { type: Number, default: 0 },
       blockChance: { type: Number, default: 0 },
       blockValue: { type: Number, default: 0 },

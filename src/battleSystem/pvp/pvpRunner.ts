@@ -1,7 +1,4 @@
-// src/battleSystem/pvp/pvpRunner.ts
-// Runner para simulaciones PvP entre dos entidades (jugador vs jugador o NPC).
-// Usa internamente CombatManager para resolver la pelea.
-// El output es un objeto con el resultado, línea de tiempo de eventos y log de texto.
+// Runner para simulaciones PvP
 
 import { CombatManager } from "../core/CombatManager";
 import type { WeaponData } from "../core/Weapon";
@@ -9,18 +6,10 @@ import { normalizeWeaponData, ensureWeaponOrDefault } from "../core/Weapon";
 import { mulberry32 } from "../core/RngFightSeed";
 
 /* ───────── Tipos del runner ───────── */
-export type TimelineEvent =
-  | "hit"
-  | "crit"
-  | "block"
-  | "miss"
-  | "passive_proc"
-  | "ultimate_cast"
-  | "dot_tick";
+export type TimelineEvent = "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast" | "dot_tick";
 
 export interface TimelineEntry {
   turn: number;
-  /** Compat con frontend (lee source o actor). */
   source?: "attacker" | "defender";
   actor: "attacker" | "defender";
   damage: number;
@@ -33,7 +22,11 @@ export interface TimelineEntry {
     id?: string;
     durationTurns?: number;
   };
-  tags?: string[];
+  /** puede ser array o un objeto: mantenemos compat */
+  tags?: any;
+  /** valores útiles para el front */
+  rawDamage?: number; // daño antes de aplicar bloqueo
+  breakdown?: { blockedAmount?: number }; // cantidad bloqueada
 }
 
 export interface PvpFightResult {
@@ -79,19 +72,14 @@ function isImpactEvent(ev: TimelineEvent) {
 
 /* ───────── armas y shape ───────── */
 function extractWeapons(raw: any): { main: WeaponData; off?: WeaponData | null } {
-  const mainRaw =
-    raw?.weapon ??
-    raw?.equipment?.weapon ??
-    raw?.equipment?.mainHand ??
-    raw?.equipment?.mainWeapon ??
-    null;
+  const mainRaw = raw?.weapon ?? raw?.equipment?.weapon ?? raw?.equipment?.mainHand ?? raw?.equipment?.mainWeapon ?? null;
 
   const offRaw =
     raw?.offHand ??
     raw?.offhand ??
     raw?.equipment?.offHand ??
     raw?.equipment?.offhand ??
-    raw?.equipment?.offWeapon ?? // ← compat
+    raw?.equipment?.offWeapon ?? // compat
     raw?.equipment?.shield ??
     null;
 
@@ -105,16 +93,14 @@ function toCMEntity(raw: any, rng: () => number) {
   const csRaw = raw?.combat ?? raw?.combatStats ?? {};
 
   const combatNorm = {
-    attackPower: toNum(csRaw.attackPower, 5),
-    magicPower: toNum(csRaw.magicPower, 0),
-    evasion: clamp01(pctToFrac(csRaw.evasion)),
-    blockChance: clamp01(pctToFrac(csRaw.blockChance)),
-    damageReduction: clamp01(pctToFrac(csRaw.damageReduction)),
-    criticalChance: clamp01(pctToFrac(csRaw.criticalChance)),
-    // Si viene como puntos % (ej: 50) se vuelve 0.5; si ya es 0.5 se respeta.
-    criticalDamageBonus: Math.max(0, pctToFrac(csRaw.criticalDamageBonus ?? 0.5)),
-    attackSpeed: Math.max(1, Math.round(toNum(csRaw.attackSpeed, 6))),
-    maxHP: toNum(csRaw.maxHP ?? raw?.maxHP, 100),
+    attackPower: Number(csRaw.attackPower ?? 5),
+    magicPower: Number(csRaw.magicPower ?? 0),
+    evasion: Math.max(0, Math.min(1, Number(csRaw.evasion ?? 0) > 1 ? Number(csRaw.evasion) / 100 : Number(csRaw.evasion))),
+    blockChance: Math.max(0, Math.min(1, Number(csRaw.blockChance ?? 0) > 1 ? Number(csRaw.blockChance) / 100 : Number(csRaw.blockChance))),
+    damageReduction: Math.max(0, Math.min(1, Number(csRaw.damageReduction ?? 0) > 1 ? Number(csRaw.damageReduction) / 100 : Number(csRaw.damageReduction))),
+    criticalChance: Math.max(0, Math.min(1, Number(csRaw.criticalChance ?? 0) > 1 ? Number(csRaw.criticalChance) / 100 : Number(csRaw.criticalChance))),
+    criticalDamageBonus: Math.max(0, Number(csRaw.criticalDamageBonus ?? 0.5) > 1 ? Number(csRaw.criticalDamageBonus) / 100 : Number(csRaw.criticalDamageBonus)),
+    maxHP: Number(csRaw.maxHP ?? raw?.maxHP ?? 100),
   };
 
   const maxHP = clampInt(raw?.maxHP ?? combatNorm.maxHP, 1, 10_000_000);
@@ -122,27 +108,21 @@ function toCMEntity(raw: any, rng: () => number) {
 
   const { main, off } = extractWeapons(raw);
 
-  // bonus liviano de escudo
-  if (off?.category === "shield") {
+  if ((off as any)?.category === "shield") {
     combatNorm.blockChance = clamp01(combatNorm.blockChance + 0.05);
     combatNorm.damageReduction = clamp01(combatNorm.damageReduction + 0.03);
   }
 
   const cls = raw?.class ?? {};
-  const passiveDefaultSkill =
-    cls?.passiveDefaultSkill ?? raw?.passiveDefaultSkill ?? undefined;
+  const passiveDefaultSkill = cls?.passiveDefaultSkill ?? raw?.passiveDefaultSkill ?? undefined;
   const ultimateSkill = cls?.ultimateSkill ?? raw?.ultimateSkill ?? undefined;
-  const primaryWeapons: string[] | undefined = Array.isArray(cls?.primaryWeapons)
-    ? cls.primaryWeapons
-    : Array.isArray(raw?.class?.primaryWeapons)
-    ? raw.class.primaryWeapons
-    : undefined;
+  const primaryWeapons: string[] | undefined = Array.isArray(cls?.primaryWeapons) ? cls.primaryWeapons : Array.isArray(raw?.class?.primaryWeapons) ? raw.class.primaryWeapons : undefined;
 
   return {
     name: raw?.name ?? raw?.username ?? "—",
     className: raw?.className ?? raw?.class?.name ?? undefined,
-    baseStats: raw?.baseStats ?? raw?.stats ?? {}, // fate vive acá
-    stats: raw?.stats ?? {}, // physicalDefense / magicalDefense
+    baseStats: raw?.baseStats ?? raw?.stats ?? {},
+    stats: raw?.stats ?? {},
     resistances: raw?.resistances ?? {},
     equipment: raw?.equipment ?? {},
     maxHP,
@@ -163,10 +143,9 @@ export function runPvp({
   defenderSnapshot,
   seed,
   maxRounds = 30,
-  // Ajustes opcionales (no rompen compat si no los enviás)
-  damageJitter,         // ej. 0.22 para mayor variación
-  critMultiplierBase,   // ej. 0.65 para críticos más potentes
-  blockReduction,       // ej. 0.45 para que el block reduzca un poco menos
+  damageJitter,
+  critMultiplierBase,
+  blockReduction,
 }: {
   attackerSnapshot: any;
   defenderSnapshot: any;
@@ -181,14 +160,12 @@ export function runPvp({
   const attacker = toCMEntity(attackerSnapshot, rng);
   const defender = toCMEntity(defenderSnapshot, rng);
 
-  // Pasamos los “tunes” al manager (si vienen). Si no, usa sus defaults.
   const cm = new CombatManager(attacker, defender, {
     rng,
-    damageJitter,
-    critMultiplierBase,
-    blockReduction,
-    // El CombatManager lleva su propio maxRounds interno por seguridad,
-    // pero el bucle de abajo ya limita por `maxRounds` (turnos).
+    damageJitter, // si pasan overrides, se respetan
+    critMultiplierBase, // idem
+    blockReduction, // idem
+    // los demás quedan con los defaults ajustados en CombatManager
   });
 
   const timeline: TimelineEntry[] = [];
@@ -202,34 +179,22 @@ export function runPvp({
     const out = isAtkTurn ? cm.playerAttack() : cm.enemyAttack();
 
     const actorSide: "player" | "enemy" = isAtkTurn ? "player" : "enemy";
-    // el que actúa en este turno SIEMPRE es el attacker
-    const actorRole: "attacker" | "defender" = "attacker";
+    const actorRole: "attacker" | "defender" = isAtkTurn ? "attacker" : "defender";
     const atkEntity = isAtkTurn ? attacker : defender;
 
-    const baseTags: string[] = [];
-    if (atkEntity?.weaponMain?.slug)
-      baseTags.push(`${actorSide}:weapon:${atkEntity.weaponMain.slug}`);
-    if (
-      atkEntity?.weaponOff?.slug &&
-      (atkEntity.weaponOff.category === "weapon" ||
-        atkEntity.weaponOff.category === "focus")
-    ) {
+    const baseTags: any[] = [];
+    if (atkEntity?.weaponMain?.slug) baseTags.push(`${actorSide}:weapon:${atkEntity.weaponMain.slug}`);
+    if (atkEntity?.weaponOff?.slug && (atkEntity.weaponOff.category === "weapon" || atkEntity.weaponOff.category === "focus")) {
       baseTags.push(`${actorSide}:weapon_off:${atkEntity.weaponOff.slug}`);
     }
 
-    // Acumuladores para etiquetar el próximo "hit"
     const impact = { crit: false, block: false };
 
-    // Helper: mapear actor "player/enemy" del evento -> "attacker/defender" en este turno
     const toRole = (evActor: "player" | "enemy"): "attacker" | "defender" => {
-      // si es turno del atacante (player), player=attacker; si no, enemy=attacker
-      return (isAtkTurn && evActor === "player") || (!isAtkTurn && evActor === "enemy")
-        ? "attacker"
-        : "defender";
+      return (isAtkTurn && evActor === "player") || (!isAtkTurn && evActor === "enemy") ? "attacker" : "defender";
     };
 
     for (const ev of out.events ?? []) {
-      // ── DoT tick: respetamos el "owner" real del DoT ──
       if (ev.type === "dot_tick") {
         const evRole = toRole(ev.actor);
         timeline.push({
@@ -240,15 +205,14 @@ export function runPvp({
           attackerHP: clampInt(cm.player.currentHP, 0, attacker.maxHP),
           defenderHP: clampInt(cm.enemy.currentHP, 0, defender.maxHP),
           event: "dot_tick",
-          tags: [...baseTags, `${evRole}:dot:${ev.key}`],
+          tags: [...baseTags, `${evRole}:dot:${(ev as any).key}`],
         });
-        log.push(`• DoT (${ev.key}) hace ${ev.damage} de daño.`);
+        log.push(`• DoT ${(ev as any).key} ${ev.damage}`);
         continue;
       }
 
-      // ── Ultimate cast (la pegada llega como hit normal luego) ──
       if (ev.type === "ultimate_cast") {
-        const evRole = actorRole; // el que actúa en el turno
+        const evRole = actorRole;
         timeline.push({
           turn,
           actor: evRole,
@@ -257,16 +221,13 @@ export function runPvp({
           attackerHP: clampInt(cm.player.currentHP, 0, attacker.maxHP),
           defenderHP: clampInt(cm.enemy.currentHP, 0, defender.maxHP),
           event: "ultimate_cast",
-          ability: { kind: "ultimate", name: ev.name },
-          tags: [...baseTags, `${evRole}:ultimate:${ev.name}`],
+          ability: { kind: "ultimate", name: (ev as any).name },
+          tags: [...baseTags, `${evRole}:ultimate:${(ev as any).name}`],
         });
-        log.push(
-          `▶️ ${evRole === "attacker" ? "Atacante" : "Defensor"} lanza Ultimate: ${ev.name}`
-        );
+        log.push(`ULTIMATE — ${(ev as any).name}`);
         continue;
       }
 
-      // ── Pasivas: puede ser del atacante o del defensor (onHitOrBeingHit) ──
       if (ev.type === "passive_proc") {
         const evRole = toRole(ev.actor);
         timeline.push({
@@ -279,22 +240,15 @@ export function runPvp({
           event: "passive_proc",
           ability: {
             kind: "passive",
-            name: ev.name,
+            name: (ev as any).name,
             durationTurns: (ev as any).duration,
           },
-          tags: [
-            ...baseTags,
-            `${evRole}:passive:${ev.name}`,
-            `${evRole}:passive:${(ev as any).result}`,
-          ],
+          tags: [...baseTags, `${evRole}:passive:${(ev as any).name}`, `${evRole}:passive:${(ev as any).result}`],
         });
-        log.push(
-          `✨ ${evRole === "attacker" ? "Atacante" : "Defensor"} activa pasiva ${ev.name}`
-        );
+        log.push(`PASSIVE — ${(ev as any).name}`);
         continue;
       }
 
-      // ── Flags previos al golpe ──
       if (ev.type === "crit") {
         impact.crit = true;
         continue;
@@ -304,7 +258,6 @@ export function runPvp({
         continue;
       }
 
-      // ── Miss "sueltos" (evasión/confusión/parálisis). Atribuimos al atacante del turno ──
       if (ev.type === "miss") {
         timeline.push({
           turn,
@@ -316,55 +269,52 @@ export function runPvp({
           event: "miss",
           tags: [...baseTags, "miss"],
         });
-        const who = isAtkTurn
-          ? attackerSnapshot?.name ?? "Atacante"
-          : defenderSnapshot?.name ?? "Defensor";
-        log.push(`${who} falla el ataque.`);
-        // limpiamos flags por si acaso
+        log.push(`MISS`);
         impact.crit = false;
         impact.block = false;
         continue;
       }
 
-      // ── Golpe real con daño: convertimos a hit/crit/block según flags acumulados ──
       if (ev.type === "hit") {
-        const dmg = (ev as any).damage?.final ?? 0;
-        const kind: TimelineEvent = impact.block
-          ? "block"
-          : impact.crit
-          ? "crit"
-          : "hit";
+        // ⬇️ Tomamos directamente lo que emite CombatManager
+        const dmgNode = (ev as any).damage || {};
+        const bd = (dmgNode as any).breakdown || {};
+        const final = Math.max(0, Math.round(Number(dmgNode.final || 0)));
+        const preBlock = Number.isFinite(Number(bd.preBlock)) ? Math.round(Number(bd.preBlock)) : undefined;
+        const blockedAmount = Number.isFinite(Number(bd.blockedAmount)) ? Math.max(0, Math.round(Number(bd.blockedAmount))) : undefined;
+
+        const kind: TimelineEvent = impact.block ? "block" : impact.crit ? "crit" : "hit";
 
         const entry: TimelineEntry = {
           turn,
           actor: actorRole,
           source: actorRole,
-          damage: dmg,
+          damage: final,
           attackerHP: clampInt(cm.player.currentHP, 0, attacker.maxHP),
           defenderHP: clampInt(cm.enemy.currentHP, 0, defender.maxHP),
           event: kind,
           tags: [...baseTags, kind],
         };
+
+        if (preBlock != null) entry.rawDamage = preBlock;
+        if (blockedAmount != null) entry.breakdown = { blockedAmount };
+
         timeline.push(entry);
 
-        const who = isAtkTurn
-          ? attackerSnapshot?.name ?? "Atacante"
-          : defenderSnapshot?.name ?? "Defensor";
-        const tgt = isAtkTurn
-          ? defenderSnapshot?.name ?? "Defensor"
-          : attackerSnapshot?.name ?? "Atacante";
+        if (kind === "block") {
+          // 🛡️ LOG corto y preciso: SOLO el valor bloqueado
+          const val = blockedAmount ?? 0;
+          log.push(`BLOCKED — ${val}`);
+        } else if (kind === "crit") {
+          log.push(`CRITICAL! ${final}`);
+        } else {
+          log.push(`HIT ${final}`);
+        }
 
-        if (kind === "block") log.push(`${tgt} bloquea (recibe ${dmg}).`);
-        else if (kind === "crit") log.push(`${who} ¡CRÍTICO! a ${tgt} por ${dmg}.`);
-        else log.push(`${who} golpea a ${tgt} por ${dmg}.`);
-
-        // reset para el siguiente strike
         impact.crit = false;
         impact.block = false;
         continue;
       }
-
-      // otros tipos se ignoran de forma segura
     }
 
     snapshots.push({
@@ -391,10 +341,12 @@ export function runPvp({
   }
   const outcome: "win" | "lose" | "draw" = !w ? "draw" : w === "player" ? "win" : "lose";
 
-  const turns = timeline.reduce(
-    (acc, e) => acc + (isImpactEvent(e.event) ? 1 : 0),
-    0
-  );
+  const turns = timeline.reduce((acc, e) => acc + (isImpactEvent(e.event) ? 1 : 0), 0);
+
+  if (DEBUG_PVP) {
+    // eslint-disable-next-line no-console
+    console.log("PvP outcome:", outcome, "turns:", turns);
+  }
 
   return { outcome, turns, timeline, log, snapshots };
 }

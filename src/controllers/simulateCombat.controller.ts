@@ -17,7 +17,7 @@ import { computeProgression } from "../services/progression.service";
 import { TimelineEvent } from "../battleSystem/pvp/pvpRunner";
 
 /** Versión de runner (Fate/procs/ultimate) */
-const RUNNER_VERSION = 2;
+const RUNNER_VERSION = 3; // ↑ bump por fixes de roles y blockedAmount
 
 function mapOutcomeForMatch(outcome: "win" | "lose" | "draw") {
   return outcome === "win" ? "attacker" : outcome === "lose" ? "defender" : "draw";
@@ -46,23 +46,11 @@ function computePvpRewards(outcome: "win" | "lose" | "draw") {
 }
 
 /** Compatibilidad: campos de puntos según esquema viejo */
-const POINTS_FIELDS = [
-  "availablePoints",
-  "statPoints",
-  "unallocatedPoints",
-  "pointsAvailable",
-  "attributePoints",
-] as const;
+const POINTS_FIELDS = ["availablePoints", "statPoints", "unallocatedPoints", "pointsAvailable", "attributePoints"] as const;
 const ATTR_POINTS_PER_LEVEL = 5;
 
-async function applyRewardsToCharacter(
-  charId: any | undefined,
-  userId: any | undefined,
-  rw: { xp?: number; gold?: number; honorDelta?: number }
-) {
-  let doc =
-    (charId && (await Character.findById(charId))) ||
-    (userId && (await Character.findOne({ userId })));
+async function applyRewardsToCharacter(charId: any | undefined, userId: any | undefined, rw: { xp?: number; gold?: number; honorDelta?: number }) {
+  let doc = (charId && (await Character.findById(charId))) || (userId && (await Character.findOne({ userId })));
 
   if (!doc) return { updated: false };
 
@@ -91,8 +79,7 @@ async function applyRewardsToCharacter(
     const gained = (newLevel - prevLevel) * ATTR_POINTS_PER_LEVEL;
     for (const f of POINTS_FIELDS) {
       if (Object.prototype.hasOwnProperty.call(doc, f)) {
-        (doc as any)[f] =
-          Math.max(0, Math.floor(Number((doc as any)[f] ?? 0))) + gained;
+        (doc as any)[f] = Math.max(0, Math.floor(Number((doc as any)[f] ?? 0))) + gained;
         break;
       }
     }
@@ -102,7 +89,7 @@ async function applyRewardsToCharacter(
   return { updated: true, characterId: (doc as any)._id };
 }
 
-/* Normalización timeline */
+/* Normalización timeline (además infiere blockedAmount cuando es posible) */
 function normalizeTimeline(items: any[]) {
   const arr = Array.isArray(items) ? items : [];
   return arr.map((it, idx) => {
@@ -112,13 +99,28 @@ function normalizeTimeline(items: any[]) {
     const attackerHP = Math.max(0, Number(it.attackerHP ?? it.playerHP ?? 0));
     const defenderHP = Math.max(0, Number(it.defenderHP ?? it.enemyHP ?? 0));
 
-    const ev = it.event as TimelineEvent;
-    if (ev === "passive_proc" || ev === "ultimate_cast") {
+    const ev = (it.event as TimelineEvent) || "hit";
+
+    // Final y raw por si vienen desde el runner/manager
+    const finalDamage = Number.isFinite(Number(it.damage?.final)) ? Number(it.damage.final) : Number.isFinite(Number(it.damage)) ? Number(it.damage) : 0;
+
+    const rawDamage = Number(it.rawDamage ?? it.damage?.raw ?? it.damageRaw ?? it.intendedDamage ?? it.baseDamage ?? it.preMitigation ?? 0);
+
+    const blockedExplicit = it.breakdown?.blockedAmount ?? it.blockedAmount ?? (typeof it.tags === "object" && !Array.isArray(it.tags) ? (it.tags as any).blockedAmount : undefined);
+
+    const blockedAmount = Number.isFinite(Number(blockedExplicit))
+      ? Math.max(0, Math.round(Number(blockedExplicit)))
+      : rawDamage > finalDamage
+      ? Math.max(0, Math.round(rawDamage - finalDamage))
+      : undefined;
+
+    // Eventos “no impacto”
+    if (ev === "passive_proc" || ev === "ultimate_cast" || ev === "dot_tick") {
       return {
         turn,
         source,
         event: ev,
-        damage: Math.max(0, Number(it.damage ?? 0)),
+        damage: Math.max(0, finalDamage),
         attackerHP,
         defenderHP,
         ability: it.ability
@@ -129,22 +131,33 @@ function normalizeTimeline(items: any[]) {
               durationTurns: Number(it.ability.durationTurns ?? 0),
             }
           : undefined,
-        tags: Array.isArray(it.tags) ? it.tags.slice(0, 12) : [],
+        tags: Array.isArray(it.tags) || typeof it.tags === "object" ? it.tags : [],
       };
     }
 
-    const event: "hit" | "crit" | "block" | "miss" =
-      (ev as any) ?? (Number(it.damage ?? 0) > 0 ? "hit" : "miss");
+    // Impacto
+    const event: "hit" | "crit" | "block" | "miss" = (["hit", "crit", "block", "miss"].includes(ev as any) ? ev : null) || (finalDamage > 0 ? "hit" : "miss");
 
-    return {
+    const base: any = {
       turn,
       source,
       event,
-      damage: Math.max(0, Number(it.damage ?? 0)),
+      damage: Math.max(0, finalDamage),
       attackerHP,
       defenderHP,
-      tags: Array.isArray(it.tags) ? it.tags.slice(0, 12) : [],
+      tags: Array.isArray(it.tags) || typeof it.tags === "object" ? it.tags : [],
     };
+
+    if (Number.isFinite(rawDamage)) base.rawDamage = Math.max(0, Math.round(rawDamage));
+    if (Number.isFinite(blockedAmount)) {
+      base.breakdown = { ...(it.breakdown || {}), blockedAmount: blockedAmount as number };
+      // ayuda extra para front que lee tags.obj
+      if (base.tags && typeof base.tags === "object" && !Array.isArray(base.tags)) {
+        (base.tags as any).blockedAmount = blockedAmount;
+      }
+    }
+
+    return base;
   });
 }
 
@@ -166,11 +179,13 @@ export const simulateCombatPreviewController: RequestHandler = async (req, res) 
       maxRounds: 30,
     });
 
+    const timelineNorm = normalizeTimeline(timeline);
+
     return res.json({
       ok: true,
       outcome,
-      turns: (timeline ?? []).length,
-      timeline,
+      turns: timelineNorm.length,
+      timeline: timelineNorm,
       log,
       snapshots,
       runnerVersion: RUNNER_VERSION,
@@ -199,11 +214,13 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
       maxRounds: 30,
     });
 
+    const timelineNorm = normalizeTimeline(timeline);
+
     return res.json({
       ok: true,
       outcome,
-      turns: (timeline ?? []).length,
-      timeline,
+      turns: timelineNorm.length,
+      timeline: timelineNorm,
       log,
       snapshots,
       runnerVersion: RUNNER_VERSION,
@@ -218,8 +235,7 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
 export const resolveCombatController: RequestHandler = async (req, res) => {
   try {
     const callerUserId = req.user?.id;
-    if (!callerUserId)
-      return res.status(401).json({ ok: false, message: "No autenticado" });
+    if (!callerUserId) return res.status(401).json({ ok: false, message: "No autenticado" });
 
     const { matchId } = req.body as { matchId?: string };
     if (!matchId || !Types.ObjectId.isValid(matchId)) {
@@ -238,16 +254,8 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
 
     // Idempotente: si ya está resuelto devolvemos lo guardado
     if (mAny.status === "resolved") {
-      const storedOutcome = (mAny.outcome ?? "draw") as
-        | "attacker"
-        | "defender"
-        | "draw";
-      const outcomeForAttacker: "win" | "lose" | "draw" =
-        storedOutcome === "attacker"
-          ? "win"
-          : storedOutcome === "defender"
-          ? "lose"
-          : "draw";
+      const storedOutcome = (mAny.outcome ?? "draw") as "attacker" | "defender" | "draw";
+      const outcomeForAttacker: "win" | "lose" | "draw" = storedOutcome === "attacker" ? "win" : storedOutcome === "defender" ? "lose" : "draw";
 
       return res.json({
         ok: true,
@@ -277,10 +285,7 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
     // Aplicar recompensas a ambos personajes
     const att = mAny.attackerSnapshot || {};
     const def = mAny.defenderSnapshot || {};
-    await Promise.all([
-      applyRewardsToCharacter(att.characterId, att.userId, rw.attacker),
-      applyRewardsToCharacter(def.characterId, def.userId, rw.defender),
-    ]);
+    await Promise.all([applyRewardsToCharacter(att.characterId, att.userId, rw.attacker), applyRewardsToCharacter(def.characterId, def.userId, rw.defender)]);
 
     // Persistir resultado en el match
     mAny.status = "resolved";

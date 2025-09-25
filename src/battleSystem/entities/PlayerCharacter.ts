@@ -54,7 +54,6 @@ export class PlayerCharacter implements CombatEntity {
       damageReduction: clamp01(pctToFrac((combatStats as any).damageReduction)),
       criticalChance: clamp01(pctToFrac((combatStats as any).criticalChance) + fateCritBonus),
       criticalDamageBonus: critBonusFrac, // ej. 0.6 = +60% (el manager ya suma 1+bonus)
-      attackSpeed: Math.max(1, asInt((combatStats as any).attackSpeed ?? 6)),
     };
 
     // Clamp HP al rango válido

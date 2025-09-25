@@ -11,15 +11,14 @@ import type { BaseStats, Resistances } from "../../interfaces/character/Characte
  * - El runner necesita fracciones 0..1, así que usamos el normalizador abajo.
  */
 export type RawCombatStats = {
-  maxHP: number;            // entero
-  attackPower: number;      // entero
-  magicPower: number;       // entero
-  evasion: number;          // puntos % (0..100)
-  blockChance: number;      // puntos % (0..100)
-  damageReduction: number;  // puntos % (0..100)
-  criticalChance: number;   // puntos % (0..100)
+  maxHP: number; // entero
+  attackPower: number; // entero
+  magicPower: number; // entero
+  evasion: number; // puntos % (0..100)
+  blockChance: number; // puntos % (0..100)
+  damageReduction: number; // puntos % (0..100)
+  criticalChance: number; // puntos % (0..100)
   criticalDamageBonus: number; // puntos % (ej: 35 = +35%)
-  attackSpeed: number;      // entero/ticks (tu motor define la unidad)
 };
 
 /**
@@ -32,19 +31,18 @@ export interface CombatEntity {
   name: string;
   level: number;
 
-  stats: BaseStats;         // incluye constitution (NO hay vitality)
+  stats: BaseStats; // incluye constitution (NO hay vitality)
   resistances: Resistances;
 
   combat: {
     maxHP: number;
     attackPower: number;
     magicPower: number;
-    evasion: number;           // 0..1
-    blockChance: number;       // 0..1
-    damageReduction: number;   // 0..1
-    criticalChance: number;    // 0..1
+    evasion: number; // 0..1
+    blockChance: number; // 0..1
+    damageReduction: number; // 0..1
+    criticalChance: number; // 0..1
     criticalDamageBonus: number; // 0.5 = +50%
-    attackSpeed: number;       // entero/ticks
   };
 
   currentHP: number; // 0..maxHP
@@ -74,21 +72,11 @@ export function normalizeCombat(raw: RawCombatStats): CombatEntity["combat"] {
     damageReduction: pctToFrac(raw.damageReduction || 0),
     criticalChance: pctToFrac(raw.criticalChance || 0),
     criticalDamageBonus: pctToFrac(raw.criticalDamageBonus || 0), // 35 → 0.35
-
-    attackSpeed: Math.max(0, Math.floor(raw.attackSpeed || 0)),
   };
 }
 
 /** Crea una CombatEntity a partir de bloques crudos y percentiles en puntos %. */
-export function makeCombatEntity(input: {
-  id: string;
-  name: string;
-  level: number;
-  stats: BaseStats;
-  resistances: Resistances;
-  combatRaw: RawCombatStats;
-  currentHP?: number;
-}): CombatEntity {
+export function makeCombatEntity(input: { id: string; name: string; level: number; stats: BaseStats; resistances: Resistances; combatRaw: RawCombatStats; currentHP?: number }): CombatEntity {
   const combat = normalizeCombat(input.combatRaw);
   const maxHP = combat.maxHP;
   const cur = Math.max(0, Math.floor(Number(input.currentHP ?? maxHP)));

@@ -5,8 +5,8 @@
 
 export type CharacterSnapshot = {
   // ---- Identidad / vínculo
-  userId: any;        // ObjectId o string
-  characterId: any;   // ObjectId o string
+  userId: any; // ObjectId o string
+  characterId: any; // ObjectId o string
 
   // ---- Para UI
   username: string;
@@ -30,13 +30,12 @@ export type CharacterSnapshot = {
   combat: {
     attackPower: number;
     magicPower: number;
-    evasion: number;            // puntos %
-    blockChance: number;        // puntos %
-    damageReduction: number;    // puntos %
-    criticalChance: number;     // puntos %
-    criticalDamageBonus: number;// puntos % (ej: 50 = +50%)
-    attackSpeed: number;
-    maxHP?: number;             // redundante
+    evasion: number; // puntos %
+    blockChance: number; // puntos %
+    damageReduction: number; // puntos %
+    criticalChance: number; // puntos %
+    criticalDamageBonus: number; // puntos % (ej: 50 = +50%)
+    maxHP?: number; // redundante
   };
 
   // Por compat con código que mira "combatStats" en vez de "combat"
@@ -55,12 +54,7 @@ export type CharacterSnapshot = {
       shortDescEn?: string;
       longDescEn?: string;
       trigger: {
-        check:
-          | "onBasicHit"
-          | "onRangedHit"
-          | "onSpellCast"
-          | "onHitOrBeingHit"
-          | "onTurnStart";
+        check: "onBasicHit" | "onRangedHit" | "onSpellCast" | "onHitOrBeingHit" | "onTurnStart";
         scaleBy?: "fate";
         baseChancePercent?: number;
         fateScalePerPoint?: number;
@@ -77,7 +71,7 @@ export type CharacterSnapshot = {
       cooldownTurns: number;
       effects?: {
         bonusDamagePercent?: number;
-        applyDebuff?: string;        // StatusKey si querés tiparlo
+        applyDebuff?: string; // StatusKey si querés tiparlo
         debuffValue?: number;
         bleedDamagePerTurn?: number;
         debuffDurationTurns?: number;
@@ -173,10 +167,7 @@ export function buildCharacterSnapshot(character: any): CharacterSnapshot {
   const name = character?.name ?? username ?? "—";
 
   // Clase: string o doc poblado
-  const classDoc =
-    character?.classId && typeof character.classId === "object" && character.classId.name
-      ? character.classId
-      : character?.class;
+  const classDoc = character?.classId && typeof character.classId === "object" && character.classId.name ? character.classId : character?.class;
 
   const className = String(classDoc?.name ?? character?.className ?? "—");
   const defaultWeapon = classDoc?.defaultWeapon ? String(classDoc.defaultWeapon) : undefined;
@@ -201,7 +192,6 @@ export function buildCharacterSnapshot(character: any): CharacterSnapshot {
     criticalChance: toNum(srcCombat.criticalChance, 0),
     // default en puntos % (50 = +50%). El runner convierte si necesita fracción.
     criticalDamageBonus: toNum(srcCombat.criticalDamageBonus, 50),
-    attackSpeed: toNum(srcCombat.attackSpeed, 1),
     maxHP: toNum(srcCombat.maxHP ?? character?.maxHP, 100),
   };
 

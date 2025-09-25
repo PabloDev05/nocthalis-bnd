@@ -35,10 +35,7 @@ type Template = {
   type: "weapon" | "armor" | "accessory" | "potion" | "material";
   baseStats?: Partial<Record<"strength" | "dexterity" | "intelligence" | "constitution" | "physicalDefense" | "magicalDefense" | "luck" | "endurance", number>>;
   baseCombat?: Partial<
-    Record<
-      "maxHP" | "criticalChance" | "criticalDamageBonus" | "attackSpeed" | "evasion" | "blockChance" | "blockValue" | "lifeSteal" | "damageReduction" | "movementSpeed" | "magicPower" | "attackPower",
-      number
-    >
+    Record<"maxHP" | "criticalChance" | "criticalDamageBonus" | "evasion" | "blockChance" | "blockValue" | "lifeSteal" | "damageReduction" | "movementSpeed" | "magicPower" | "attackPower", number>
   >;
   weaponBase?: { min: number; max: number; speed?: number; hands?: 1 | 2; kind?: WeaponData["type"] };
   icon: string;

@@ -5,8 +5,7 @@ import type { EnemyLean } from "../types/lean";
 import { RESISTANCE_KEYS, clampRes } from "../battleSystem/constants/resistances";
 
 /** Campos públicos que usamos en motor/UI */
-export const ENEMY_PUBLIC_PROJECTION =
-  "_id name level tier bossType xpReward goldReward dropProfile stats resistances combatStats";
+export const ENEMY_PUBLIC_PROJECTION = "_id name level tier bossType xpReward goldReward dropProfile stats resistances combatStats";
 
 /** DTO que devolvemos hacia fuera (id en string, sin _id) */
 export type EnemyDTO = Omit<EnemyLean, "_id"> & { id: string };
@@ -43,7 +42,6 @@ function sanitizeEnemy(doc: EnemyLean): EnemyDTO {
     magicPower: toInt(cmbIn.magicPower, 0),
     criticalChance: toInt(cmbIn.criticalChance, 0),
     criticalDamageBonus: toInt(cmbIn.criticalDamageBonus, 0),
-    attackSpeed: toInt(cmbIn.attackSpeed, 0),
     evasion: toInt(cmbIn.evasion, 0),
     blockChance: toInt(cmbIn.blockChance, 0),
     blockValue: toInt(cmbIn.blockValue, 0),
@@ -68,10 +66,7 @@ function sanitizeEnemy(doc: EnemyLean): EnemyDTO {
 export async function findEnemyByIdLean(id: string): Promise<EnemyDTO | null> {
   if (!isObjId(id)) return null;
 
-  const doc = await Enemy.findById(id)
-    .select(ENEMY_PUBLIC_PROJECTION)
-    .lean<EnemyLean>()
-    .exec();
+  const doc = await Enemy.findById(id).select(ENEMY_PUBLIC_PROJECTION).lean<EnemyLean>().exec();
 
   if (!doc) return null;
   return sanitizeEnemy(doc);
@@ -98,7 +93,7 @@ export async function findEnemiesByIdsLean(ids: string[]): Promise<EnemyDTO[]> {
  * Todos los filtros son opcionales; `limit` por defecto 50 (clamp 1..200).
  */
 export async function listEnemiesLean(params?: {
-  tier?: string;            // ← en tus seeds lo manejás string
+  tier?: string; // ← en tus seeds lo manejás string
   minLevel?: number;
   maxLevel?: number;
   bossType?: string;
@@ -116,12 +111,7 @@ export async function listEnemiesLean(params?: {
 
   const limit = Math.max(1, Math.min(200, Number(params?.limit ?? 50)));
 
-  const rows = await Enemy.find(q)
-    .select(ENEMY_PUBLIC_PROJECTION)
-    .sort({ level: 1, tier: 1, name: 1 })
-    .limit(limit)
-    .lean<EnemyLean[]>()
-    .exec();
+  const rows = await Enemy.find(q).select(ENEMY_PUBLIC_PROJECTION).sort({ level: 1, tier: 1, name: 1 }).limit(limit).lean<EnemyLean[]>().exec();
 
   return rows.map(sanitizeEnemy);
 }

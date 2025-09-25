@@ -56,7 +56,13 @@ type CharacterResponseDTO = {
   createdAt: Date;
   updatedAt: Date;
   availablePoints?: number;
-  stamina: { stamina: number; staminaMax: number; usedRate: number; updatedAt: string; etaFullAt: string | null };
+  stamina: {
+    stamina: number;
+    staminaMax: number;
+    usedRate: number;
+    updatedAt: string;
+    etaFullAt: string | null;
+  };
 };
 
 const mapSubclass = (s: any): SubclassDTO => ({
@@ -104,12 +110,16 @@ export const getMyCharacter: RequestHandler = async (req, res) => {
     const userId = req.user?.id;
     if (!userId || !mongoose.Types.ObjectId.isValid(userId)) return res.status(401).json({ message: "No autenticado" });
 
-    const characterDoc = await Character.findOne({ userId }).populate({ path: "userId", select: "username" }).lean();
+    const characterDoc = await Character.findOne({ userId })
+      .populate({ path: "userId", select: "username" }) // _id viene por defecto
+      .lean();
+
     if (!characterDoc) return res.status(404).json({ message: "Personaje no encontrado" });
 
     const baseClassDoc = await CharacterClass.findById(characterDoc.classId)
       .select("name description iconName imageMainClassUrl primaryWeapons secondaryWeapons defaultWeapon allowedWeapons passiveDefaultSkill passiveDefault ultimateSkill subclasses baseStats")
       .lean();
+
     if (!baseClassDoc) return res.status(404).json({ message: "Clase base no encontrada" });
 
     const classMeta = mapClassMeta(baseClassDoc);
@@ -130,7 +140,7 @@ export const getMyCharacter: RequestHandler = async (req, res) => {
 
     const payload: CharacterResponseDTO = {
       id: String(characterDoc._id),
-      userId: String(characterDoc.userId),
+      userId: toId((characterDoc as any).userId), // ⭐ asegurar string del _id incluso cuando userId está populado
       username: usernameFromPopulate,
       class: classMeta,
       selectedSubclass,

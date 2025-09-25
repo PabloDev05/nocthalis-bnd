@@ -8,6 +8,7 @@ import { runPvp } from "../../battleSystem";
 import { computeProgression } from "../../services/progression.service";
 import { spendStamina, getStaminaByUserId } from "../../services/stamina.service";
 import { weaponTemplateFor } from "../../battleSystem/core/Weapon"; // ← usa la plantilla para min/max
+import { TimelineEvent } from "../pvp/pvpRunner";
 
 /** Costo de stamina por pelea PvP (se cobra al resolver) */
 const STAMINA_COST_PVP = 10;
@@ -46,11 +47,7 @@ const POINTS_FIELDS = ["availablePoints", "statPoints", "unallocatedPoints", "po
 const ATTR_POINTS_PER_LEVEL = 5;
 
 /** Aplica recompensas + actualiza level si corresponde */
-async function applyRewardsToCharacter(
-  charId: any | undefined,
-  userId: any | undefined,
-  rw: { xp?: number; gold?: number; honorDelta?: number }
-) {
+async function applyRewardsToCharacter(charId: any | undefined, userId: any | undefined, rw: { xp?: number; gold?: number; honorDelta?: number }) {
   let doc = (charId && (await Character.findById(charId))) || (userId && (await Character.findOne({ userId })));
 
   if (!doc) return { updated: false };
@@ -122,39 +119,26 @@ const toInt = (v: any, def = 0) => {
   return Number.isFinite(n) ? Math.floor(n) : def;
 };
 
-function normalizeTimeline(items: TLIn[] | undefined | null) {
+function normalizeTimeline(items: any[]) {
   const arr = Array.isArray(items) ? items : [];
   return arr.map((it, idx) => {
     const source = (it.source ?? it.actor ?? "attacker") as "attacker" | "defender";
-    const turn = toInt(it.turn ?? idx + 1, idx + 1);
+    const turn = Number.isFinite(Number(it.turn)) ? Math.floor(it.turn) : idx + 1;
 
-    // HPs: aceptar player/enemy (legacy) o attacker/defender directos
-    let attackerHP = toInt(it.attackerHP, NaN);
-    let defenderHP = toInt(it.defenderHP, NaN);
-    if (!Number.isFinite(attackerHP) || !Number.isFinite(defenderHP)) {
-      const p = toInt(it.playerHP, 0);
-      const e = toInt(it.enemyHP, 0);
-      if (source === "attacker") {
-        attackerHP = p;
-        defenderHP = e;
-      } else {
-        attackerHP = e;
-        defenderHP = p;
-      }
-    }
-    attackerHP = Math.max(0, attackerHP);
-    defenderHP = Math.max(0, defenderHP);
+    const attackerHP = Math.max(0, Number(it.attackerHP ?? it.playerHP ?? 0));
+    const defenderHP = Math.max(0, Number(it.defenderHP ?? it.enemyHP ?? 0));
 
-    const ev = it.event as TLIn["event"];
-    const commonTags = Array.isArray(it.tags) ? it.tags.slice(0, 12) : Array.isArray(it.events) ? it.events.slice(0, 12) : [];
+    const ev = it.event as TimelineEvent;
 
-    // eventos de habilidad (sin daño o daño 0 si no vino)
+    // preservamos tags tanto si es array como si es objeto
+    const tags = Array.isArray(it.tags) ? it.tags.slice(0, 12) : typeof it.tags === "object" ? it.tags : undefined;
+
     if (ev === "passive_proc" || ev === "ultimate_cast") {
       return {
         turn,
         source,
         event: ev,
-        damage: Math.max(0, toInt(it.damage, 0)),
+        damage: Math.max(0, Number(it.damage ?? 0)),
         attackerHP,
         defenderHP,
         ability: it.ability
@@ -162,43 +146,41 @@ function normalizeTimeline(items: TLIn[] | undefined | null) {
               kind: it.ability.kind === "ultimate" ? "ultimate" : "passive",
               name: it.ability.name,
               id: it.ability.id,
-              durationTurns: toInt(it.ability.durationTurns, undefined as any),
+              durationTurns: Number(it.ability.durationTurns ?? 0),
             }
           : undefined,
-        tags: commonTags,
-      };
-    }
-
-    // nuevo: tick de DoT
-    if (ev === "dot_tick") {
-      const dmg = Math.max(0, toInt(it.damage, 0));
-      const dotKey = (it.key || "") as TLIn["key"];
-      const tags = [...commonTags, "dot", dotKey || ""].filter(Boolean).slice(0, 12);
-      return {
-        turn,
-        source,
-        event: "dot_tick" as const,
-        damage: dmg,
-        attackerHP,
-        defenderHP,
-        // guardamos la key del dot como tag para UI/analytics
         tags,
       };
     }
 
-    // eventos de golpeo (default: si trae daño => hit, si no => miss)
-    const event: "hit" | "crit" | "block" | "miss" = (ev as any) ?? (toInt(it.damage, 0) > 0 ? "hit" : "miss");
-    const damage = Math.max(0, toInt(it.damage, 0));
+    const event: "hit" | "crit" | "block" | "miss" = (ev as any) ?? (Number(it.damage ?? 0) > 0 ? "hit" : "miss");
 
-    return {
+    // ⬇️ traer explícitamente lo que necesitamos para el log del bloqueo
+    const blockedAmount = Number.isFinite(Number(it?.breakdown?.blockedAmount))
+      ? Math.round(Number(it.breakdown.blockedAmount))
+      : Number.isFinite(Number(it?.damage?.breakdown?.blockedAmount))
+      ? Math.round(Number(it.damage.breakdown.blockedAmount))
+      : undefined;
+
+    const rawDamage = Number.isFinite(Number(it?.rawDamage))
+      ? Math.round(Number(it.rawDamage))
+      : Number.isFinite(Number(it?.damage?.breakdown?.preBlock))
+      ? Math.round(Number(it.damage.breakdown.preBlock))
+      : undefined;
+
+    const out: any = {
       turn,
       source,
       event,
-      damage,
+      damage: Math.max(0, Number(it.damage ?? 0)),
       attackerHP,
       defenderHP,
-      tags: commonTags,
+      tags,
     };
+    if (rawDamage != null) out.rawDamage = rawDamage;
+    if (blockedAmount != null) out.breakdown = { blockedAmount };
+
+    return out;
   });
 }
 
@@ -326,8 +308,7 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
     // Ya resuelto → devolvemos lo persistido
     if (mAny.status === "resolved") {
       const storedOutcome = (mAny.outcome ?? "draw") as "attacker" | "defender" | "draw";
-      const outcomeForAttacker: "win" | "lose" | "draw" =
-        storedOutcome === "attacker" ? "win" : storedOutcome === "defender" ? "lose" : "draw";
+      const outcomeForAttacker: "win" | "lose" | "draw" = storedOutcome === "attacker" ? "win" : storedOutcome === "defender" ? "lose" : "draw";
 
       const attackerStored = (Array.isArray(mAny.snapshots) && mAny.snapshots[0]) || mAny.attackerSnapshot;
       const defenderStored = (Array.isArray(mAny.snapshots) && mAny.snapshots[1]) || mAny.defenderSnapshot;
@@ -378,10 +359,7 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
 
     const att = mAny.attackerSnapshot || {};
     const def = mAny.defenderSnapshot || {};
-    await Promise.all([
-      applyRewardsToCharacter(att.characterId, att.userId, rw.attacker),
-      applyRewardsToCharacter(def.characterId, def.userId, rw.defender),
-    ]);
+    await Promise.all([applyRewardsToCharacter(att.characterId, att.userId, rw.attacker), applyRewardsToCharacter(def.characterId, def.userId, rw.defender)]);
 
     mAny.status = "resolved";
     mAny.outcome = mapOutcomeForMatch(outcome);
