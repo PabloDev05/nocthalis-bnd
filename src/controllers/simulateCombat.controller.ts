@@ -1,15 +1,23 @@
-// src/controllers/simulateCombat.controller.ts
 /* eslint-disable no-console */
+// Simulación y resolución de combates PvP (nuevo sistema)
+// src/controllers/simulateCombat.controller.ts
+// - Resolve YA NO cobra stamina (el cobro ocurre en /arena/challenges)
+// - Preview público (cualquiera puede ver la simulación de un match)
+// - Guarda log y snapshots del combate en el match
+// - Actualiza stats de personajes y usuarios
+// - No guarda historial de combate (CombatResult) como en el sistema viejo
+// - No soporta PvE (usar /combat/preview y /combat/resolve del sistema viejo)
+
 import type { RequestHandler } from "express";
 import { Types } from "mongoose";
 import { Match } from "../models/Match";
 import { Character } from "../models/Character";
 import { runPvp } from "../battleSystem";
 import { computeProgression } from "../services/progression.service";
-import { spendStamina, getStaminaByUserId } from "../services/stamina.service";
+import { TimelineEvent } from "../battleSystem/pvp/pvpRunner";
 
-/** Costo de stamina por pelea PvP (se cobra al resolver) */
-const STAMINA_COST_PVP = 10;
+/** Versión de runner (Fate/procs/ultimate) */
+const RUNNER_VERSION = 3; // ↑ bump por fixes de roles y blockedAmount
 
 function mapOutcomeForMatch(outcome: "win" | "lose" | "draw") {
   return outcome === "win" ? "attacker" : outcome === "lose" ? "defender" : "draw";
@@ -37,11 +45,10 @@ function computePvpRewards(outcome: "win" | "lose" | "draw") {
   };
 }
 
-/** Compat: si tenés un campo de puntos en la DB, lo incrementamos en level-up */
+/** Compatibilidad: campos de puntos según esquema viejo */
 const POINTS_FIELDS = ["availablePoints", "statPoints", "unallocatedPoints", "pointsAvailable", "attributePoints"] as const;
 const ATTR_POINTS_PER_LEVEL = 5;
 
-/** Aplica recompensas + actualiza level si corresponde */
 async function applyRewardsToCharacter(charId: any | undefined, userId: any | undefined, rw: { xp?: number; gold?: number; honorDelta?: number }) {
   let doc = (charId && (await Character.findById(charId))) || (userId && (await Character.findOne({ userId })));
 
@@ -59,7 +66,7 @@ async function applyRewardsToCharacter(charId: any | undefined, userId: any | un
     (doc as any).honor += rw.honorDelta;
   }
 
-  // recalcular nivel segun XP total (misma curva que /character/progression)
+  // recalcular nivel
   const prevLevel = Number((doc as any).level ?? 1);
   const totalXP = Number((doc as any).experience ?? 0);
   const prog = computeProgression(totalXP, prevLevel);
@@ -68,7 +75,7 @@ async function applyRewardsToCharacter(charId: any | undefined, userId: any | un
   if (newLevel > prevLevel) {
     (doc as any).level = newLevel;
 
-    // Compat opcional: si existe alguno de estos campos, asignamos puntos
+    // asignar puntos de atributos
     const gained = (newLevel - prevLevel) * ATTR_POINTS_PER_LEVEL;
     for (const f of POINTS_FIELDS) {
       if (Object.prototype.hasOwnProperty.call(doc, f)) {
@@ -82,68 +89,38 @@ async function applyRewardsToCharacter(charId: any | undefined, userId: any | un
   return { updated: true, characterId: (doc as any)._id };
 }
 
-/* ---------- normalización de timeline para cumplir schema ---------- */
-type TLIn =
-  | {
-      turn?: number;
-      source?: "attacker" | "defender";
-      actor?: "attacker" | "defender";
-      event?: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast";
-      damage?: number;
-      attackerHP?: number;
-      defenderHP?: number;
-      playerHP?: number;
-      enemyHP?: number;
-      events?: string[];
-      ability?: {
-        kind?: "passive" | "ultimate";
-        name?: string;
-        id?: string;
-        durationTurns?: number;
-      };
-      tags?: string[];
-    }
-  | any;
-
-const toInt = (v: any, def = 0) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.floor(n) : (def as any);
-};
-
-function normalizeTimeline(items: TLIn[] | undefined | null) {
+/* Normalización timeline (además infiere blockedAmount cuando es posible) */
+function normalizeTimeline(items: any[]) {
   const arr = Array.isArray(items) ? items : [];
   return arr.map((it, idx) => {
     const source = (it.source ?? it.actor ?? "attacker") as "attacker" | "defender";
-    const turn = toInt(it.turn ?? idx + 1, idx + 1);
+    const turn = Number.isFinite(Number(it.turn)) ? Math.floor(it.turn) : idx + 1;
 
-    // HPs: aceptar player/enemy (legacy) o attacker/defender directos
-    let attackerHP = toInt(it.attackerHP, NaN);
-    let defenderHP = toInt(it.defenderHP, NaN);
-    if (!Number.isFinite(attackerHP) || !Number.isFinite(defenderHP)) {
-      const p = toInt(it.playerHP, 0);
-      const e = toInt(it.enemyHP, 0);
-      if (source === "attacker") {
-        attackerHP = p;
-        defenderHP = e;
-      } else {
-        attackerHP = e;
-        defenderHP = p;
-      }
-    }
-    attackerHP = Math.max(0, attackerHP);
-    defenderHP = Math.max(0, defenderHP);
+    const attackerHP = Math.max(0, Number(it.attackerHP ?? it.playerHP ?? 0));
+    const defenderHP = Math.max(0, Number(it.defenderHP ?? it.enemyHP ?? 0));
 
-    const ev = it.event as TLIn["event"];
-    const tags = Array.isArray(it.tags) ? it.tags.slice(0, 8).map(String) : [];
+    const ev = (it.event as TimelineEvent) || "hit";
 
-    // Eventos de habilidad: preservar metadatos y normalizar damage
-    if (ev === "passive_proc" || ev === "ultimate_cast") {
-      const hasDur = typeof it.ability?.durationTurns === "number";
+    // Final y raw por si vienen desde el runner/manager
+    const finalDamage = Number.isFinite(Number(it.damage?.final)) ? Number(it.damage.final) : Number.isFinite(Number(it.damage)) ? Number(it.damage) : 0;
+
+    const rawDamage = Number(it.rawDamage ?? it.damage?.raw ?? it.damageRaw ?? it.intendedDamage ?? it.baseDamage ?? it.preMitigation ?? 0);
+
+    const blockedExplicit = it.breakdown?.blockedAmount ?? it.blockedAmount ?? (typeof it.tags === "object" && !Array.isArray(it.tags) ? (it.tags as any).blockedAmount : undefined);
+
+    const blockedAmount = Number.isFinite(Number(blockedExplicit))
+      ? Math.max(0, Math.round(Number(blockedExplicit)))
+      : rawDamage > finalDamage
+      ? Math.max(0, Math.round(rawDamage - finalDamage))
+      : undefined;
+
+    // Eventos “no impacto”
+    if (ev === "passive_proc" || ev === "ultimate_cast" || ev === "dot_tick") {
       return {
         turn,
         source,
         event: ev,
-        damage: Math.max(0, toInt(it.damage, 0)),
+        damage: Math.max(0, finalDamage),
         attackerHP,
         defenderHP,
         ability: it.ability
@@ -151,27 +128,36 @@ function normalizeTimeline(items: TLIn[] | undefined | null) {
               kind: it.ability.kind === "ultimate" ? "ultimate" : "passive",
               name: it.ability.name,
               id: it.ability.id,
-              durationTurns: hasDur ? toInt(it.ability!.durationTurns, 0) : undefined,
+              durationTurns: Number(it.ability.durationTurns ?? 0),
             }
           : undefined,
-        tags,
+        tags: Array.isArray(it.tags) || typeof it.tags === "object" ? it.tags : [],
       };
     }
 
-    // Golpeo “normal”
-    const event: "hit" | "crit" | "block" | "miss" = (ev as any) ?? (toInt(it.damage, 0) > 0 ? "hit" : "miss");
+    // Impacto
+    const event: "hit" | "crit" | "block" | "miss" = (["hit", "crit", "block", "miss"].includes(ev as any) ? ev : null) || (finalDamage > 0 ? "hit" : "miss");
 
-    const damage = Math.max(0, toInt(it.damage, 0));
-
-    return {
+    const base: any = {
       turn,
       source,
       event,
-      damage,
+      damage: Math.max(0, finalDamage),
       attackerHP,
       defenderHP,
-      // ability/tags no aplican aquí
+      tags: Array.isArray(it.tags) || typeof it.tags === "object" ? it.tags : [],
     };
+
+    if (Number.isFinite(rawDamage)) base.rawDamage = Math.max(0, Math.round(rawDamage));
+    if (Number.isFinite(blockedAmount)) {
+      base.breakdown = { ...(it.breakdown || {}), blockedAmount: blockedAmount as number };
+      // ayuda extra para front que lee tags.obj
+      if (base.tags && typeof base.tags === "object" && !Array.isArray(base.tags)) {
+        (base.tags as any).blockedAmount = blockedAmount;
+      }
+    }
+
+    return base;
   });
 }
 
@@ -193,10 +179,17 @@ export const simulateCombatPreviewController: RequestHandler = async (req, res) 
       maxRounds: 30,
     });
 
-    console.log("[PVP][GET/preview] outcome:", outcome, "turns:", (timeline ?? []).length);
-    console.log("[PVP][GET/preview] snapshots.len =", (snapshots ?? []).length);
+    const timelineNorm = normalizeTimeline(timeline);
 
-    return res.json({ ok: true, outcome, timeline, log, snapshots });
+    return res.json({
+      ok: true,
+      outcome,
+      turns: timelineNorm.length,
+      timeline: timelineNorm,
+      log,
+      snapshots,
+      runnerVersion: RUNNER_VERSION,
+    });
   } catch (err) {
     console.error("GET /combat/simulate (preview) error:", err);
     return res.status(500).json({ ok: false, message: "Error interno" });
@@ -205,7 +198,6 @@ export const simulateCombatPreviewController: RequestHandler = async (req, res) 
 
 /* ---------------- POST /combat/simulate (preview, auth) ---------------- */
 export const simulateCombatController: RequestHandler = async (req, res) => {
-  console.log("hace /combat/simulate backend");
   try {
     const { matchId } = req.body as { matchId?: string };
     if (!matchId || !Types.ObjectId.isValid(matchId)) {
@@ -222,19 +214,25 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
       maxRounds: 30,
     });
 
-    console.log("[PVP][POST/sim] outcome:", outcome, "turns:", (timeline ?? []).length);
-    console.log("[PVP][POST/sim] snapshots.len =", (snapshots ?? []).length);
+    const timelineNorm = normalizeTimeline(timeline);
 
-    return res.json({ ok: true, outcome, timeline, log, snapshots });
+    return res.json({
+      ok: true,
+      outcome,
+      turns: timelineNorm.length,
+      timeline: timelineNorm,
+      log,
+      snapshots,
+      runnerVersion: RUNNER_VERSION,
+    });
   } catch (err) {
     console.error("POST /combat/simulate error:", err);
     return res.status(500).json({ ok: false, message: "Error interno" });
   }
 };
 
-/* ---------------- POST /combat/resolve (auth, PERSISTE + cobra stamina) ---------------- */
+/* ---------------- POST /combat/resolve ---------------- */
 export const resolveCombatController: RequestHandler = async (req, res) => {
-  console.log("/combat/resolve..backend");
   try {
     const callerUserId = req.user?.id;
     if (!callerUserId) return res.status(401).json({ ok: false, message: "No autenticado" });
@@ -249,7 +247,12 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
 
     const mAny = match as any;
 
-    // Ya resuelto → devolvemos lo persistido
+    // Solo el atacante puede resolver su match
+    if (String(mAny.attackerUserId) !== String(callerUserId)) {
+      return res.status(403).json({ ok: false, message: "No autorizado" });
+    }
+
+    // Idempotente: si ya está resuelto devolvemos lo guardado
     if (mAny.status === "resolved") {
       const storedOutcome = (mAny.outcome ?? "draw") as "attacker" | "defender" | "draw";
       const outcomeForAttacker: "win" | "lose" | "draw" = storedOutcome === "attacker" ? "win" : storedOutcome === "defender" ? "lose" : "draw";
@@ -261,24 +264,14 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
         timeline: Array.isArray(mAny.timeline) ? mAny.timeline : [],
         snapshots: Array.isArray(mAny.snapshots) ? mAny.snapshots : [],
         log: Array.isArray(mAny.log) ? mAny.log : [],
+        turns: Number(mAny.turns ?? mAny.timeline?.length ?? 0),
         alreadyResolved: true,
+        runnerVersion: Number(mAny.runnerVersion ?? RUNNER_VERSION),
       });
     }
 
-    // 💥 Cobro stamina SOLO al usuario que ejecuta el resolve (atacante normalmente)
-    const spent = await spendStamina(callerUserId, STAMINA_COST_PVP);
-    if (!spent.ok) {
-      const snap = await getStaminaByUserId(callerUserId).catch(() => null);
-      return res.status(400).json({
-        ok: false,
-        message: "Stamina insuficiente",
-        required: STAMINA_COST_PVP,
-        stamina: snap || undefined,
-        reason: (spent as any).reason,
-      });
-    }
+    // ⛔️ Ya NO se descuenta stamina aquí. El gasto se hace en /arena/challenges.
 
-    // Simulación y persistencia
     const { outcome, timeline, log, snapshots } = runPvp({
       attackerSnapshot: mAny.attackerSnapshot,
       defenderSnapshot: mAny.defenderSnapshot,
@@ -286,16 +279,15 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
       maxRounds: 30,
     });
 
-    console.log("[PVP][POST/resolve] outcome:", outcome, "turns:", (timeline ?? []).length);
-    console.log("[PVP][POST/resolve] snapshots.len =", (snapshots ?? []).length);
-
     const timelineNorm = normalizeTimeline(timeline);
     const rw = computePvpRewards(outcome);
 
+    // Aplicar recompensas a ambos personajes
     const att = mAny.attackerSnapshot || {};
     const def = mAny.defenderSnapshot || {};
     await Promise.all([applyRewardsToCharacter(att.characterId, att.userId, rw.attacker), applyRewardsToCharacter(def.characterId, def.userId, rw.defender)]);
 
+    // Persistir resultado en el match
     mAny.status = "resolved";
     mAny.outcome = mapOutcomeForMatch(outcome);
     mAny.winner = outcome === "win" ? "player" : outcome === "lose" ? "enemy" : "draw";
@@ -308,6 +300,7 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
     mAny.timeline = timelineNorm;
     mAny.snapshots = Array.isArray(snapshots) ? snapshots : [];
     mAny.log = Array.isArray(log) ? log : [];
+    mAny.runnerVersion = RUNNER_VERSION;
 
     await match.save();
 
@@ -318,15 +311,11 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
       timeline: timelineNorm,
       snapshots,
       log,
-      staminaAfter: spent.after, // snapshot de stamina luego de cobrar
+      turns: timelineNorm.length,
+      runnerVersion: RUNNER_VERSION,
     });
   } catch (err: any) {
     console.error("POST /combat/resolve error:", err?.name, err?.message);
-    if (err?.errors) {
-      for (const [k, v] of Object.entries(err.errors)) {
-        console.error(`[resolve][validation] ${k}:`, (v as any)?.message);
-      }
-    }
     return res.status(500).json({ ok: false, message: "Error interno" });
   }
 };

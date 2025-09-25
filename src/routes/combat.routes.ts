@@ -1,3 +1,4 @@
+// src/routes/combat.routes.ts
 import { Router } from "express";
 import { requireAuth } from "../middleware/requireAuth";
 import { simulateCombatPreviewController, simulateCombatController, resolveCombatController } from "../controllers/simulateCombat.controller";

@@ -1,38 +1,64 @@
 // src/battleSystem/index.ts
 
+/**
+ * Barrel del sistema de batalla:
+ * - Core/Engine: CombatManager, StatusEngine, RNG determinístico.
+ * - Snapshots: buildCharacterSnapshot (copia valores tal cual para el runner).
+ * - Weapons: tipos + helpers (roll, plantillas, primary bonus).
+ * - PvP Runner: runPvp (+ tipos de salida/timeline).
+ * - Passives: packs y sumatoria de modificadores (para stats/combate).
+ * - Constants/Fixtures/UI: utilidades compartidas.
+ *
+ * Ejemplo de uso:
+ *   import { runPvp, CombatManager, weaponTemplateFor } from "@/battleSystem";
+ */
+
 // ───────────────────────────────────────────
 // Core / Engine
 // ───────────────────────────────────────────
 export { CombatManager } from "./core/CombatManager";
+export type { AttackFlags, SideKey, ManagerOpts } from "./core/CombatManager";
 export { mulberry32 } from "./core/RngFightSeed";
-export { buildCharacterSnapshot } from "./core/CharacterSnapshot";
 export { StatusEngine } from "./core/StatusEngine";
+
+// OJO: la función de snapshot vive en /snapshots (no en /core)
+export { buildCharacterSnapshot } from "./snapshots/CharacterSnapshot";
 
 // ───────────────────────────────────────────
 // Weapons (helpers + tipos)
 // ───────────────────────────────────────────
 export type { WeaponData, WeaponCategory, WeaponDamageType } from "./core/Weapon";
-export { rollWeaponDamage, weaponTemplateFor, normalizeWeaponData, ensureWeaponOrDefault, isPrimaryWeapon, PRIMARY_WEAPON_BONUS_MULT } from "./core/Weapon";
+export {
+  rollWeaponDamage,
+  weaponTemplateFor,
+  normalizeWeaponData,
+  ensureWeaponOrDefault,
+  isPrimaryWeapon,
+  PRIMARY_WEAPON_BONUS_MULT,
+} from "./core/Weapon";
 
 // ───────────────────────────────────────────
 // PvP Runner (canónico)
 // ───────────────────────────────────────────
-export { runPvp, runPvpForMatch } from "./pvp/pvpRunner";
-export type { PvpFightResult, TimelineEntry as PvpTimelineEntry, TimelineEvent as PvpTimelineEvent, RunPvpForMatchResult, MatchTimelineEntry } from "./pvp/pvpRunner";
+export { runPvp } from "./pvp/pvpRunner";
+export type {
+  PvpFightResult,
+  TimelineEntry as PvpTimelineEntry,
+  TimelineEvent as PvpTimelineEvent,
+} from "./pvp/pvpRunner";
 
 // ───────────────────────────────────────────
 // Entities (opcionales fuera del módulo)
+//   *Si tu proyecto no tiene estos archivos, podés quitar estas líneas.*
 // ───────────────────────────────────────────
 export { PlayerCharacter } from "./entities/PlayerCharacter";
 export { EnemyBot } from "./entities/EnemyBot";
 
 // ───────────────────────────────────────────
 // Passives (packs + efectos)
-//  ⚠️ sin comodín para evitar conflictos de tipos
 // ───────────────────────────────────────────
 export { buildClassPassivePack } from "./passives/ClassPacks";
 export { collectPassivesForCharacter, applyPassivesToBlocks } from "./passives/PassiveEffects";
-export type { PassiveHooks, AttackFlags, SideKey } from "./passives/types";
 
 // ───────────────────────────────────────────
 // Fixtures (para tests / dev only)
@@ -49,4 +75,4 @@ export * from "./constants/status";
 // ───────────────────────────────────────────
 // UI helpers (animación de timeline)
 // ───────────────────────────────────────────
-export * from "./ui/animationScheduler";
+// export * from "./ui/animationScheduler";

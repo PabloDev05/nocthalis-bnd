@@ -1,4 +1,3 @@
-// src/battleSystem/factories/buildCombatEntities.ts
 import { Types } from "mongoose";
 import { Character } from "../../models/Character";
 import { Enemy } from "../../models/Enemy";
@@ -10,12 +9,12 @@ const DEF_STATS: Stats = {
   strength: 0,
   dexterity: 0,
   intelligence: 0,
-  vitality: 0,
+  constitution: 0,
   physicalDefense: 0,
   magicalDefense: 0,
   luck: 0,
   endurance: 0,
-  fate: 0, // ✅ faltaba este campo requerido por Stats
+  fate: 0,
 };
 
 const DEF_RES: Resistances = {
@@ -43,7 +42,6 @@ const DEF_COMBAT: CombatStats = {
   magicPower: 5,
   criticalChance: 5,
   criticalDamageBonus: 25,
-  attackSpeed: 5,
   evasion: 5,
   blockChance: 0,
   blockValue: 0,
@@ -85,7 +83,7 @@ export async function buildPlayerCharacter(id?: string) {
 
   if (!c) throw new Error("Character not found");
 
-  const name = c.name ?? c.username ?? "Jugador";
+  const name = (c as any).name ?? (c as any).username ?? "Jugador";
   const level = Number(c.level ?? 1);
   const stats = mergeDefaults(c.stats, DEF_STATS);
   const res = mergeDefaults(c.resistances, DEF_RES);

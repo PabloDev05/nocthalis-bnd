@@ -4,12 +4,12 @@ export type WeaponCategory = "weapon" | "shield" | "focus";
 export type WeaponDamageType = "physical" | "magic";
 
 export interface WeaponData {
-  slug: string; // ej: "rapier", "cursed_crossbow"
-  minDamage: number; // daño mínimo del ítem (entero)
-  maxDamage: number; // daño máximo del ítem (entero)
-  type: WeaponDamageType; // tipo de daño base
+  slug: string;            // ej: "rapier", "cursed_crossbow"
+  minDamage: number;       // daño mínimo del ítem (entero)
+  maxDamage: number;       // daño máximo del ítem (entero)
+  type: WeaponDamageType;  // tipo de daño base
   category?: WeaponCategory; // por defecto "weapon"
-  hands?: 1 | 2; // opcional
+  hands?: 1 | 2;           // opcional
 }
 
 /** Bonus multiplicativo si el arma es primaria de la clase */
@@ -34,7 +34,13 @@ const slugify = (s: any) =>
   String(s ?? "")
     .trim()
     .toLowerCase()
-    .replace(/\s+/g, "_");
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const asWeaponType = (v: any): WeaponDamageType => {
+  const s = String(v ?? "").toLowerCase();
+  return s === "magic" || s === "magical" ? "magic" : "physical";
+};
 
 /** Mapa de alias → clave base (agrupa nombres “de fantasía” a un arquetipo) */
 const ALIAS: Record<string, string> = {
@@ -184,7 +190,7 @@ export function normalizeWeaponData(input: any): WeaponData {
       slug: base.slug,
       minDamage: base.minDamage,
       maxDamage: base.maxDamage,
-      type: (String(input.type ?? input.damageType ?? base.type).toLowerCase() === "magic" ? "magic" : "physical") as WeaponDamageType,
+      type: asWeaponType(input.type ?? input.damageType ?? base.type),
       category: String(input.category ?? input.kind ?? base.category ?? "weapon").toLowerCase() as WeaponCategory,
       hands: input.hands === 2 ? 2 : base.hands ?? 1,
     };
@@ -198,7 +204,7 @@ export function normalizeWeaponData(input: any): WeaponData {
     slug: slug || "unknown",
     minDamage: fixedMin,
     maxDamage: fixedMax,
-    type: (String(input.type ?? input.damageType ?? "physical").toLowerCase() === "magic" ? "magic" : "physical") as WeaponDamageType,
+    type: asWeaponType(input.type ?? input.damageType ?? "physical"),
     category: String(input.category ?? input.kind ?? "weapon").toLowerCase() as WeaponCategory,
     hands: input.hands === 2 ? 2 : 1,
   };
@@ -211,6 +217,13 @@ export function isPrimaryWeapon(weapon: WeaponData | null | undefined, primaryNa
   const prim = new Set(primaryNames.map(slugify).map((n) => ALIAS[n] ?? n));
   const base = ALIAS[w] ?? w;
   return prim.has(base);
+}
+
+/** Hints de “arma a distancia” por slug (por si querés centralizar en un único lugar) */
+export const RANGED_HINTS_RX = /bow|crossbow|rifle|gun|pistol|arquebus|flintlock|handcannon/i;
+export function isRangedWeapon(w?: WeaponData | null): boolean {
+  if (!w) return false;
+  return RANGED_HINTS_RX.test(w.slug);
 }
 
 /** Devuelve un arma válida o el default (fists / o el “defaultWeapon” de la clase si lo pasás). */

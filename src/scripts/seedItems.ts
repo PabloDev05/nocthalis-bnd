@@ -33,12 +33,9 @@ const NAME_BY_TIER: Record<(typeof TIERS)[number]["key"], string> = {
 // Plantillas por slot (sin mana/maxMP)
 type Template = {
   type: "weapon" | "armor" | "accessory" | "potion" | "material";
-  baseStats?: Partial<Record<"strength" | "dexterity" | "intelligence" | "vitality" | "physicalDefense" | "magicalDefense" | "luck" | "endurance", number>>;
+  baseStats?: Partial<Record<"strength" | "dexterity" | "intelligence" | "constitution" | "physicalDefense" | "magicalDefense" | "luck" | "endurance", number>>;
   baseCombat?: Partial<
-    Record<
-      "maxHP" | "criticalChance" | "criticalDamageBonus" | "attackSpeed" | "evasion" | "blockChance" | "blockValue" | "lifeSteal" | "damageReduction" | "movementSpeed" | "magicPower" | "attackPower",
-      number
-    >
+    Record<"maxHP" | "criticalChance" | "criticalDamageBonus" | "evasion" | "blockChance" | "blockValue" | "lifeSteal" | "damageReduction" | "movementSpeed" | "magicPower" | "attackPower", number>
   >;
   weaponBase?: { min: number; max: number; speed?: number; hands?: 1 | 2; kind?: WeaponData["type"] };
   icon: string;
@@ -48,13 +45,13 @@ type Template = {
 const SLOT_TEMPLATES: Record<SlotKey, Template> = {
   helmet: {
     type: "armor",
-    baseStats: { vitality: 1, physicalDefense: 1, magicalDefense: 1 },
+    baseStats: { constitution: 1, physicalDefense: 1, magicalDefense: 1 },
     icon: "/icons/helmet.png",
     nameHint: "Yelmo",
   },
   chest: {
     type: "armor",
-    baseStats: { vitality: 2, physicalDefense: 2, magicalDefense: 1, endurance: 1 },
+    baseStats: { constitution: 2, physicalDefense: 2, magicalDefense: 1, endurance: 1 },
     icon: "/icons/chest.png",
     nameHint: "Peto",
   },

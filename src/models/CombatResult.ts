@@ -17,12 +17,12 @@ const IntAny = {
 };
 
 export interface CombatSnapshotDoc {
-  round: number; // entero >= 1
-  actor: "player" | "enemy"; // quién golpeó
-  damage: number; // entero >= 0
-  playerHP: number; // HP restante del atacante (POV player) tras el evento
-  enemyHP: number; // HP restante del defensor tras el evento
-  events: string[]; // tags: "player:hit", "enemy:weapon:basic_bow", "player:passive:Bleed", "enemy:ultimate:ShadowNova", etc.
+  round: number; // >= 1
+  actor: "player" | "enemy";
+  damage: number; // >= 0
+  playerHP: number;
+  enemyHP: number;
+  events: string[]; // tags libres para UI/VFX/analytics
   status?: {
     player: { key: string; stacks: number; turnsLeft: number }[];
     enemy: { key: string; stacks: number; turnsLeft: number }[];
@@ -30,31 +30,31 @@ export interface CombatSnapshotDoc {
 }
 
 export interface CombatResultDocument extends Document<Types.ObjectId> {
-  userId?: Types.ObjectId | null; // dueño del registro (PvE / preview)
-  characterId?: Types.ObjectId | null; // personaje involucrado (opcional en PvP)
-  enemyId?: Types.ObjectId | null; // PvE
+  userId?: Types.ObjectId | null;
+  characterId?: Types.ObjectId | null;
+  enemyId?: Types.ObjectId | null;
 
-  /** Link opcional a Match cuando es PvP (útil para trazabilidad) */
   matchId?: Types.ObjectId | null;
 
-  /** preview/resolve + variantes PvP */
   mode: "preview" | "resolve" | "pvp-preview" | "pvp-resolve";
   winner: "player" | "enemy" | "draw";
-  turns: number; // entero >= 0
-  seed?: number | null; // si hubo corrida determinística
-  log: string[]; // mensajes humanos (opcional)
-  snapshots: CombatSnapshotDoc[]; // timeline compacta
+  turns: number; // >= 0
+  seed?: number | null;
+
+  log: string[];
+  snapshots: CombatSnapshotDoc[];
   rewards?: {
-    xpGained?: number; // enteros
+    xpGained?: number;
     goldGained?: number;
     honorDelta?: number; // puede ser negativo en PvP
-    levelUps?: number[]; // niveles alcanzados (enteros)
-    drops?: string[]; // ids de drop
+    levelUps?: number[];
+    drops?: string[];
   } | null;
 
   createdAt: Date;
 }
 
+/* ───────── Sub-schemas ───────── */
 const StatusEntrySchema = new Schema(
   {
     key: { type: String, required: true },
@@ -64,34 +64,40 @@ const StatusEntrySchema = new Schema(
   { _id: false }
 );
 
+// Bloque status como subdocumento para tipado estricto
+const StatusBlockSchema = new Schema(
+  {
+    player: { type: [StatusEntrySchema], default: undefined },
+    enemy: { type: [StatusEntrySchema], default: undefined },
+  },
+  { _id: false }
+);
+
 const SnapshotSchema = new Schema<CombatSnapshotDoc>(
   {
-    // override min a 1 para cumplir contrato “>= 1”
-    round: { ...IntNonNeg, min: 1, required: true },
+    round: { ...IntNonNeg, min: 1, required: true }, // >= 1
     actor: { type: String, enum: ["player", "enemy"], required: true },
     damage: { ...IntNonNeg, required: true },
     playerHP: { ...IntNonNeg, required: true },
     enemyHP: { ...IntNonNeg, required: true },
     events: { type: [String], default: [] },
-    status: {
-      player: { type: [StatusEntrySchema], default: undefined },
-      enemy: { type: [StatusEntrySchema], default: undefined },
-    },
+    status: { type: StatusBlockSchema, default: undefined },
   },
   { _id: false }
 );
 
 const CombatResultSchema = new Schema<CombatResultDocument>(
   {
-    userId: { type: Schema.Types.ObjectId, ref: "User", default: null, index: true },
+    userId:      { type: Schema.Types.ObjectId, ref: "User",      default: null, index: true },
     characterId: { type: Schema.Types.ObjectId, ref: "Character", default: null, index: true },
-    enemyId: { type: Schema.Types.ObjectId, ref: "Enemy", default: null, index: true },
+    enemyId:     { type: Schema.Types.ObjectId, ref: "Enemy",     default: null, index: true },
 
     matchId: { type: Schema.Types.ObjectId, ref: "Match", default: null, index: true },
 
-    mode: { type: String, enum: ["preview", "resolve", "pvp-preview", "pvp-resolve"], required: true, index: true },
+    mode:   { type: String, enum: ["preview", "resolve", "pvp-preview", "pvp-resolve"], required: true, index: true },
     winner: { type: String, enum: ["player", "enemy", "draw"], required: true, index: true },
-    turns: { ...IntNonNeg, required: true },
+    turns:  { ...IntNonNeg, required: true },
+
     seed: {
       type: Number,
       default: null,
@@ -102,14 +108,18 @@ const CombatResultSchema = new Schema<CombatResultDocument>(
     snapshots: { type: [SnapshotSchema], default: [] },
 
     rewards: {
-      xpGained: IntNonNeg,
-      goldGained: IntNonNeg,
-      honorDelta: IntAny, // puede ser negativo
+      xpGained:  IntNonNeg,
+      goldGained:IntNonNeg,
+      honorDelta:IntAny, // puede ser negativo
       levelUps: {
         type: [Number],
         default: [],
-        // fuerza enteros por si llegan como strings/floats
-        set: (arr: any) => (Array.isArray(arr) ? arr.map((v) => Math.trunc(Number(v) || 0)).filter((n) => Number.isFinite(n)) : []),
+        set: (arr: any) =>
+          Array.isArray(arr)
+            ? arr
+                .map((v) => Math.trunc(Number(v) || 0))
+                .filter((n) => Number.isFinite(n))
+            : [],
       },
       drops: { type: [String], default: [] },
     },
@@ -117,20 +127,21 @@ const CombatResultSchema = new Schema<CombatResultDocument>(
   { timestamps: { createdAt: true, updatedAt: false }, versionKey: false }
 );
 
-// Índices útiles
+/* ───────── Índices útiles ───────── */
 CombatResultSchema.index({ userId: 1, createdAt: -1 });
 CombatResultSchema.index({ characterId: 1, createdAt: -1 });
 CombatResultSchema.index({ mode: 1, winner: 1 });
-// Enlazado PvP
 CombatResultSchema.index({ matchId: 1, createdAt: -1 });
 
 CombatResultSchema.set("toJSON", {
   virtuals: true,
   transform: (_doc, ret) => {
-    ret.id = String(ret._id);
-    Reflect.deleteProperty(ret as any, "_id");
+    (ret as any).id = String(ret._id);
+    delete (ret as any)._id;
     return ret;
   },
 });
 
-export const CombatResult = (mongoose.models.CombatResult as mongoose.Model<CombatResultDocument>) || mongoose.model<CombatResultDocument>("CombatResult", CombatResultSchema);
+export const CombatResult =
+  (mongoose.models.CombatResult as mongoose.Model<CombatResultDocument>) ||
+  mongoose.model<CombatResultDocument>("CombatResult", CombatResultSchema);

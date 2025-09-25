@@ -6,7 +6,7 @@ export interface UserDocument extends Document {
   username: string;
   email: string;
   /** Hash o password plano según tu flujo actual (ambos ocultos al serializar). */
-  password: string;
+  password?: string;
   passwordHash?: string;
 
   /** Legacy: lo mantenemos para no romper nada de tu front actual. */
@@ -29,27 +29,40 @@ export interface UserModel extends Model<UserDocument> {}
 
 const UserSchema = new Schema<UserDocument>(
   {
-    // ❌ sin index/unique aquí (lo declaramos abajo con schema.index)
-    username: { type: String, required: true, trim: true },
-    email: { type: String, required: true, lowercase: true, trim: true },
+    // Declaramos validaciones mínimas y normalización
+    username: {
+      type: String,
+      required: true,
+      trim: true,
+      minlength: 3,
+      maxlength: 32,
+      match: /^[a-zA-Z0-9_.-]+$/, // simple y suficiente
+    },
+    email: {
+      type: String,
+      required: true,
+      lowercase: true,
+      trim: true,
+      minlength: 5,
+      maxlength: 254,
+    },
 
     // Mantengo ambos campos por compat; ambos se ocultan en toJSON/toObject.
-    password: { type: String, required: true, select: false },
+    password: { type: String, select: false },
     passwordHash: { type: String, select: false },
 
     subClass: { type: String, default: "" },
 
-    // ❌ sin index aquí
     characterClass: {
       type: Schema.Types.ObjectId,
       ref: "CharacterClass",
       default: null,
+      index: true,
     },
 
     classChosen: { type: Boolean, default: false },
 
-    // ❌ sin index aquí
-    lastSeen: { type: Date, default: Date.now },
+    lastSeen: { type: Date, default: Date.now, index: true },
   },
   {
     timestamps: true,
@@ -83,10 +96,11 @@ UserSchema.virtual("id").get(function (this: { _id: Types.ObjectId }) {
   return this._id.toString();
 });
 
-/* Índices — declarados SOLO acá para evitar duplicados */
-UserSchema.index({ username: 1 }, { unique: true });
-UserSchema.index({ email: 1 }, { unique: true });
-UserSchema.index({ characterClass: 1 });
-UserSchema.index({ lastSeen: -1 });
+/* Índices — case-insensitive donde conviene */
+UserSchema.index({ email: 1 }, { unique: true, collation: { locale: "en", strength: 2 } });
+// Si querés username case-insensitive también, deja este; si no, quítale la collation.
+UserSchema.index({ username: 1 }, { unique: true, collation: { locale: "en", strength: 2 } });
 
-export const User = (mongoose.models.User as UserModel) || model<UserDocument, UserModel>("User", UserSchema);
+export const User =
+  (mongoose.models.User as UserModel) ||
+  model<UserDocument, UserModel>("User", UserSchema);

@@ -1,10 +1,10 @@
 // src/battleSystem/constants/status.ts
 
 /**
- * Base definitions of BUFFS/DEBUFFS for turn-based combat.
- * - Keys, names, description for UI/logs.
- * - No balance numbers here; just structure (durations, tags, affected stats).
- * - Safe to import even if your engine still doesn't apply any status logic.
+ * Definiciones base de BUFFS/DEBUFFS para combate por turnos.
+ * - Solo estructura y metadata legible por UI/runner.
+ * - Sin números de balance “duros” más allá de duración base y maxStacks.
+ * - Todo en ENTEROS (stacks, turnos).
  */
 
 export const STATUS_KEYS = [
@@ -25,7 +25,6 @@ export const STATUS_KEYS = [
   "silence",
 
   // Generic buffs
-  "haste",
   "shield",
   "rage",
   "fortify",
@@ -34,28 +33,28 @@ export const STATUS_KEYS = [
 export type StatusKey = (typeof STATUS_KEYS)[number];
 export type StatusKind = "buff" | "debuff";
 
-/** Definition of a status effect (buff or debuff). */
+/** Definición legible de un estado (buff o debuff). */
 export interface StatusDef {
   key: StatusKey;
   kind: StatusKind;
   name: string;
   description?: string;
-  /** Optional free-form tags for UI/filters (“dot”, “control”, “physical”, “magic”, etc.) */
+  /** Tags libres para UI/filtrado (“dot”, “control”, “physical”, “magic”, etc.) */
   tags?: string[];
-  /** Max stacks if stackable (omit or 1 for non-stackable) */
+  /** Máximo de acumulaciones (omitido o 1 ⇒ no stackea) */
   maxStacks?: number;
-  /** Default duration in turns (UI & fallback) */
+  /** Duración base en turnos (para UI y fallback) */
   baseDuration?: number;
-  /** When periodic effects tick */
+  /** Momento de tiqueo para DoTs */
   tickOn?: "turnStart" | "turnEnd";
   /**
-   * Names of derived stats this status is expected to modify while active.
-   * This is just metadata for the engine/UI (e.g., ["attackPower", "damageReduction"]).
+   * Stats derivados que se espera modifique mientras esté activo (sólo hints).
+   * Ej.: ["attackPower", "damageReduction"]
    */
   affects?: string[];
 }
 
-/** Catalog with readable names & minimal metadata. */
+/** Catálogo con nombres y metadata mínima. */
 export const STATUS_CATALOG: Record<StatusKey, StatusDef> = {
   // ───── Debuffs ─────
   burn: {
@@ -192,16 +191,6 @@ export const STATUS_CATALOG: Record<StatusKey, StatusDef> = {
   },
 
   // ───── Buffs ─────
-  haste: {
-    key: "haste",
-    kind: "buff",
-    name: "Haste",
-    description: "Increases Attack Speed.",
-    tags: ["speed"],
-    baseDuration: 2,
-    affects: ["attackSpeed"],
-  },
-
   shield: {
     key: "shield",
     kind: "buff",
@@ -232,26 +221,60 @@ export const STATUS_CATALOG: Record<StatusKey, StatusDef> = {
   },
 };
 
-/** Helper to retrieve a definition (safe for UI). */
+/* ───────────────────────── Helpers exportados ───────────────────────── */
+
+/** Type guard para validar keys dinámicamente. */
+export function isStatusKey(x: any): x is StatusKey {
+  return typeof x === "string" && (STATUS_KEYS as readonly string[]).includes(x);
+}
+
+/** Obtiene la definición de un status; arroja si la key es inválida. */
 export function getStatusDef(key: StatusKey): StatusDef {
   return STATUS_CATALOG[key];
 }
 
+/** Instancia de estado que usa el runner/snapshots. */
+export interface StatusInstance {
+  key: StatusKey;
+  stacks: number; // entero ≥ 1 (si stackea)
+  turnsLeft: number; // entero ≥ 0
+}
+
+/** Enteriza/limita stacks a [1..maxStacks] (o 1 si no stackea). */
+export function clampStacks(key: StatusKey, wantStacks: number): number {
+  const def = getStatusDef(key);
+  const max = Math.max(1, Math.trunc(def.maxStacks ?? 1));
+  const s = Math.max(1, Math.trunc(wantStacks || 1));
+  return s > max ? max : s;
+}
+
+/** Duración por defecto en turnos (≥1) para inicializar efectos. */
+export function defaultDuration(key: StatusKey): number {
+  const def = getStatusDef(key);
+  const d = Math.trunc(def.baseDuration ?? 1);
+  return d >= 1 ? d : 1;
+}
+
+/** Crea una instancia normalizada (enteros) lista para aplicar. */
+export function makeStatusInstance(key: StatusKey, stacks?: number, durationTurns?: number): StatusInstance {
+  const s = clampStacks(key, stacks ?? 1);
+  const t = Math.max(0, Math.trunc(durationTurns ?? defaultDuration(key)));
+  return { key, stacks: s, turnsLeft: t };
+}
+
+/* Listas útiles para lógica rápida en el runner/UI */
+export const DOT_STATUS: Readonly<StatusKey[]> = ["burn", "poison", "bleed"];
+export const CONTROL_STATUS: Readonly<StatusKey[]> = ["freeze", "shock", "stun", "sleep", "paralysis", "confusion", "fear", "knockback", "silence"];
+
 /**
- * 📌 Notes
+ * 📌 Notas de mapeo (según seed/ultimates):
+ *   Vampire    → aplica `weaken`
+ *   Werewolf   → aplica `bleed`
+ *   Necromancer→ aplica `curse`
+ *   Revenant   → aplica `fear`
+ *   Exorcist   → aplica `silence`
  *
- * - Durations are in turns (`baseDuration`).
- * - DoTs (`burn`, `poison`, `bleed`) typically tick at `turnStart`.
- * - `affects` lists the derived stats a status intends to modify while active
- *   (your engine can read this as hints when you implement full status math).
- *
- * - Class ultimates mapping (per your seed):
- *   Vampire   → applies `weaken`
- *   Werewolf  → applies `bleed`
- *   Necromancer → applies `curse`
- *   Revenant  → applies `fear`
- *   Exorcist  → applies `silence`
- *
- * This file is **non-breaking**: importing it won't alter combat unless you
- * explicitly wire these statuses in your runner/engine.
+ * Este módulo NO altera el combate por sí mismo: tu engine decide cómo
+ * interpretar `affects`, cuándo tiquean los DoTs, cómo consume `turnsLeft`,
+ * y cómo interactúan stacks con refresh/extend.
  */

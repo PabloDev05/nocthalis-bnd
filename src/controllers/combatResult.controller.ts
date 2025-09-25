@@ -94,7 +94,7 @@ export async function getCombatResultsController(req: Request, res: Response) {
           // rewards compacto
           rewards: 1,
         })
-        .lean()
+        .lean({ virtuals: true }) // ← incluye id virtual
         .exec(),
     ]);
 
@@ -133,9 +133,12 @@ export async function getCombatResultDetailController(req: Request, res: Respons
     const withCounts = q.withCounts === "1";
 
     // Solo slices que existen en el modelo (no hay timeline aquí)
-    const query = CombatResult.findById(id).slice("snapshots", [ssSkip, ssLimit]).slice("log", [logSkip, logLimit]);
+    const doc = await CombatResult.findById(id)
+      .slice("snapshots", [ssSkip, ssLimit])
+      .slice("log", [logSkip, logLimit])
+      .lean({ virtuals: true }) // ← incluye id virtual
+      .exec();
 
-    const doc = await query.lean().exec();
     if (!doc) return res.status(404).json({ message: "No encontrado" });
 
     // (opcional) validar pertenencia

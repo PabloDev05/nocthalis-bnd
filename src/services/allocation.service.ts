@@ -1,65 +1,61 @@
-/* eslint-disable no-console */
-// Servicio minimalista de asignación de puntos.
-// - Incluye FATE en las asignaciones.
-// - Sin curvas ni reglas por clase: el motor de combate se encarga de efectos.
-// - Compatible con cualquier clase de tu seed (Vampire, Werewolf, etc).
+/* ========================================================================== *
+ * Allocation service (fuente única de verdad para puntos)
+ * ========================================================================== */
 
-import type { BaseStats } from "../interfaces/character/CharacterClass.interface";
+export const ASSIGNABLE_KEYS = ["strength", "dexterity", "intelligence", "constitution", "endurance", "luck", "fate", "physicalDefense", "magicalDefense"] as const;
 
-/** Stats asignables (alineados a tu UI y al seed). */
-export const ASSIGNABLE_KEYS: (keyof BaseStats)[] = [
-  "strength",
-  "dexterity",
-  "intelligence",
-  "vitality",
-  "physicalDefense",
-  "magicalDefense",
-  "luck",
-  "endurance",
-  "fate", // NEW
-];
+export type AssignKey = (typeof ASSIGNABLE_KEYS)[number];
 
-/** Puntos que gana el jugador por nivel (ajústalo si querés). */
 export const POINTS_PER_LEVEL = 5;
 
-/** Suma segura de enteros (evita NaN). */
-function i(n: any, d = 0) {
-  const v = Math.floor(Number(n));
-  return Number.isFinite(v) ? v : d;
+/* ---------- helpers ---------- */
+const I0 = (v: any) => Math.max(0, Math.trunc(Number(v) || 0));
+
+function toPlain<T = any>(x: any): T {
+  try {
+    if (x && typeof x.toObject === "function") return x.toObject({ depopulate: true });
+    return JSON.parse(JSON.stringify(x ?? {}));
+  } catch {
+    return (x ?? {}) as T;
+  }
 }
 
-/**
- * available = level * POINTS_PER_LEVEL - Σ max(0, current[k] - base[k])
- * (solo claves asignables)
- *
- * Nota: si preferís “nivel 1 = 0 puntos”, cambia a:
- *   const totalEarned = Math.max(0, level - 1) * POINTS_PER_LEVEL;
- */
-export function computeAvailablePoints(level: number, current: BaseStats, base: BaseStats): number {
-  const totalEarned = Math.max(0, i(level)) * POINTS_PER_LEVEL;
+/** Puntos ganados por nivel alcanzado (lvl>=1). */
+export function getPointsEarned(level: number): number {
+  const lvl = Math.max(1, Math.trunc(Number(level ?? 1)));
+  return (lvl - 1) * POINTS_PER_LEVEL;
+}
 
+/** Σ(max(0, stats[k] - baseStats[k])) sobre claves asignables.  (stats/base pueden ser subdocs) */
+export function computeSpentPoints(statsRaw: Record<string, any>, baseRaw: Record<string, any>): number {
+  const stats = toPlain<Record<string, any>>(statsRaw || {});
+  const base = toPlain<Record<string, any>>(baseRaw || {});
   let spent = 0;
   for (const k of ASSIGNABLE_KEYS) {
-    const cur = i((current as any)[k], 0);
-    const bas = i((base as any)[k], 0);
-    spent += Math.max(0, cur - bas);
+    const cur = I0(stats[k]);
+    const bse = I0(base[k]);
+    spent += Math.max(0, cur - bse);
   }
-  return Math.max(0, totalEarned - spent);
+  return spent;
 }
 
-/** Aplica incrementos (enteros ≥ 0) y devuelve una NUEVA copia de stats. */
-export function applyIncrements(current: BaseStats, inc: Partial<BaseStats>): BaseStats {
-  const out: BaseStats = { ...current } as BaseStats;
+/** available = getPointsEarned(level) - computeSpentPoints(stats, baseStats). */
+export function computeAvailablePoints(level: number, statsRaw: Record<string, any>, baseRaw: Record<string, any>): number {
+  const pool = getPointsEarned(level);
+  const spent = computeSpentPoints(statsRaw, baseRaw);
+  return Math.max(0, pool - spent);
+}
+
+/** Suma incrementos enteros a los stats (stats puede ser subdocumento de Mongoose). */
+export function applyIncrements(statsRaw: Record<string, any>, inc: Partial<Record<AssignKey, number>>): Record<string, number> {
+  const base = toPlain<Record<string, number>>(statsRaw || {});
+  const out: Record<string, number> = { ...base };
+
   for (const k of ASSIGNABLE_KEYS) {
-    const add = Math.max(0, i((inc as any)[k], 0));
-    (out as any)[k] = Math.max(0, i((out as any)[k], 0) + add);
+    const add = I0(inc[k] ?? 0);
+    if (!add) continue;
+    const cur = I0(out[k] ?? base[k] ?? 0);
+    out[k] = cur + add;
   }
   return out;
-}
-
-/** Utilidad opcional: suma total de puntos invertidos (solo asignables). */
-export function sumAssigned(stats: Partial<BaseStats> | BaseStats): number {
-  let s = 0;
-  for (const k of ASSIGNABLE_KEYS) s += Math.max(0, i((stats as any)[k], 0));
-  return s;
 }

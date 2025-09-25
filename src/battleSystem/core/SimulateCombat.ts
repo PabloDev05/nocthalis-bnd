@@ -1,5 +1,5 @@
-// src/controllers/simulateCombat.controller.ts
 /* eslint-disable no-console */
+//src/battleSystem/core/SimulateCombat.ts
 import type { RequestHandler } from "express";
 import { Types } from "mongoose";
 import { Match } from "../../models/Match";
@@ -7,6 +7,8 @@ import { Character } from "../../models/Character";
 import { runPvp } from "../../battleSystem";
 import { computeProgression } from "../../services/progression.service";
 import { spendStamina, getStaminaByUserId } from "../../services/stamina.service";
+import { weaponTemplateFor } from "../../battleSystem/core/Weapon"; // ← usa la plantilla para min/max
+import { TimelineEvent } from "../pvp/pvpRunner";
 
 /** Costo de stamina por pelea PvP (se cobra al resolver) */
 const STAMINA_COST_PVP = 10;
@@ -91,7 +93,8 @@ type TLIn =
       turn?: number;
       source?: "attacker" | "defender";
       actor?: "attacker" | "defender";
-      event?: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast";
+      /** ahora aceptamos también 'dot_tick' */
+      event?: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast" | "dot_tick";
       damage?: number;
       attackerHP?: number;
       defenderHP?: number;
@@ -104,6 +107,9 @@ type TLIn =
         id?: string;
         durationTurns?: number;
       };
+      /** para dot_tick solemos traer key ('bleed'|'poison'|'burn') y victim */
+      key?: "bleed" | "poison" | "burn";
+      victim?: "attacker" | "defender";
       tags?: string[];
     }
   | any;
@@ -113,39 +119,26 @@ const toInt = (v: any, def = 0) => {
   return Number.isFinite(n) ? Math.floor(n) : def;
 };
 
-function normalizeTimeline(items: TLIn[] | undefined | null) {
+function normalizeTimeline(items: any[]) {
   const arr = Array.isArray(items) ? items : [];
   return arr.map((it, idx) => {
     const source = (it.source ?? it.actor ?? "attacker") as "attacker" | "defender";
-    const turn = toInt(it.turn ?? idx + 1, idx + 1);
+    const turn = Number.isFinite(Number(it.turn)) ? Math.floor(it.turn) : idx + 1;
 
-    // HPs: aceptar player/enemy (legacy) o attacker/defender directos
-    let attackerHP = toInt(it.attackerHP, NaN);
-    let defenderHP = toInt(it.defenderHP, NaN);
-    if (!Number.isFinite(attackerHP) || !Number.isFinite(defenderHP)) {
-      const p = toInt(it.playerHP, 0);
-      const e = toInt(it.enemyHP, 0);
-      if (source === "attacker") {
-        attackerHP = p;
-        defenderHP = e;
-      } else {
-        attackerHP = e;
-        defenderHP = p;
-      }
-    }
-    attackerHP = Math.max(0, attackerHP);
-    defenderHP = Math.max(0, defenderHP);
+    const attackerHP = Math.max(0, Number(it.attackerHP ?? it.playerHP ?? 0));
+    const defenderHP = Math.max(0, Number(it.defenderHP ?? it.enemyHP ?? 0));
 
-    const ev = it.event as TLIn["event"];
-    const commonTags = Array.isArray(it.tags) ? it.tags.slice(0, 12) : Array.isArray(it.events) ? it.events.slice(0, 12) : [];
+    const ev = it.event as TimelineEvent;
 
-    // si es un evento de habilidad, lo preservamos y default damage=0 si no vino
+    // preservamos tags tanto si es array como si es objeto
+    const tags = Array.isArray(it.tags) ? it.tags.slice(0, 12) : typeof it.tags === "object" ? it.tags : undefined;
+
     if (ev === "passive_proc" || ev === "ultimate_cast") {
       return {
         turn,
         source,
         event: ev,
-        damage: Math.max(0, toInt(it.damage, 0)),
+        damage: Math.max(0, Number(it.damage ?? 0)),
         attackerHP,
         defenderHP,
         ability: it.ability
@@ -153,27 +146,63 @@ function normalizeTimeline(items: TLIn[] | undefined | null) {
               kind: it.ability.kind === "ultimate" ? "ultimate" : "passive",
               name: it.ability.name,
               id: it.ability.id,
-              durationTurns: toInt(it.ability.durationTurns, undefined as any),
+              durationTurns: Number(it.ability.durationTurns ?? 0),
             }
           : undefined,
-        tags: commonTags,
+        tags,
       };
     }
 
-    // eventos de golpeo
-    const event: "hit" | "crit" | "block" | "miss" = (ev as any) ?? (toInt(it.damage, 0) > 0 ? "hit" : "miss");
-    const damage = Math.max(0, toInt(it.damage, 0));
+    const event: "hit" | "crit" | "block" | "miss" = (ev as any) ?? (Number(it.damage ?? 0) > 0 ? "hit" : "miss");
 
-    return {
+    // ⬇️ traer explícitamente lo que necesitamos para el log del bloqueo
+    const blockedAmount = Number.isFinite(Number(it?.breakdown?.blockedAmount))
+      ? Math.round(Number(it.breakdown.blockedAmount))
+      : Number.isFinite(Number(it?.damage?.breakdown?.blockedAmount))
+      ? Math.round(Number(it.damage.breakdown.blockedAmount))
+      : undefined;
+
+    const rawDamage = Number.isFinite(Number(it?.rawDamage))
+      ? Math.round(Number(it.rawDamage))
+      : Number.isFinite(Number(it?.damage?.breakdown?.preBlock))
+      ? Math.round(Number(it.damage.breakdown.preBlock))
+      : undefined;
+
+    const out: any = {
       turn,
       source,
       event,
-      damage,
+      damage: Math.max(0, Number(it.damage ?? 0)),
       attackerHP,
       defenderHP,
-      tags: commonTags,
+      tags,
     };
+    if (rawDamage != null) out.rawDamage = rawDamage;
+    if (blockedAmount != null) out.breakdown = { blockedAmount };
+
+    return out;
   });
+}
+
+/* ---------- Helper para adjuntar meta de UI (min/max + skills) ---------- */
+function sideUiFromSnapshot(snap: any) {
+  if (!snap) return undefined;
+  const w = weaponTemplateFor(snap?.weapon);
+  return {
+    name: snap?.name ?? "—",
+    className: snap?.class?.name ?? snap?.className ?? "—",
+    combatStats: {
+      ...(snap?.combat ?? {}),
+      minDamage: w.minDamage,
+      maxDamage: w.maxDamage,
+      // compat con props que tal vez mira el front
+      damageMin: w.minDamage,
+      damageMax: w.maxDamage,
+    },
+    passiveDefaultSkill: snap?.class?.passiveDefaultSkill ?? null,
+    ultimateSkill: snap?.class?.ultimateSkill ?? null,
+    weaponSlug: snap?.weapon ?? null,
+  };
 }
 
 /* ---------------- GET /combat/simulate (preview público) ---------------- */
@@ -197,6 +226,9 @@ export const simulateCombatPreviewController: RequestHandler = async (req, res) 
     console.log("[PVP][GET/preview] outcome:", outcome, "turns:", (timeline ?? []).length);
     console.log("[PVP][GET/preview] snapshots.len =", (snapshots ?? []).length);
 
+    const attacker = sideUiFromSnapshot((snapshots as any)?.[0] ?? (match as any).attackerSnapshot);
+    const defender = sideUiFromSnapshot((snapshots as any)?.[1] ?? (match as any).defenderSnapshot);
+
     return res.json({
       ok: true,
       outcome,
@@ -205,6 +237,8 @@ export const simulateCombatPreviewController: RequestHandler = async (req, res) 
       log,
       snapshots,
       runnerVersion: RUNNER_VERSION,
+      attacker, // UI meta
+      defender, // UI meta
     });
   } catch (err) {
     console.error("GET /combat/simulate (preview) error:", err);
@@ -234,6 +268,9 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
     console.log("[PVP][POST/sim] outcome:", outcome, "turns:", (timeline ?? []).length);
     console.log("[PVP][POST/sim] snapshots.len =", (snapshots ?? []).length);
 
+    const attacker = sideUiFromSnapshot((snapshots as any)?.[0] ?? (match as any).attackerSnapshot);
+    const defender = sideUiFromSnapshot((snapshots as any)?.[1] ?? (match as any).defenderSnapshot);
+
     return res.json({
       ok: true,
       outcome,
@@ -242,6 +279,8 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
       log,
       snapshots,
       runnerVersion: RUNNER_VERSION,
+      attacker, // UI meta
+      defender, // UI meta
     });
   } catch (err) {
     console.error("POST /combat/simulate error:", err);
@@ -271,6 +310,11 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
       const storedOutcome = (mAny.outcome ?? "draw") as "attacker" | "defender" | "draw";
       const outcomeForAttacker: "win" | "lose" | "draw" = storedOutcome === "attacker" ? "win" : storedOutcome === "defender" ? "lose" : "draw";
 
+      const attackerStored = (Array.isArray(mAny.snapshots) && mAny.snapshots[0]) || mAny.attackerSnapshot;
+      const defenderStored = (Array.isArray(mAny.snapshots) && mAny.snapshots[1]) || mAny.defenderSnapshot;
+      const attacker = sideUiFromSnapshot(attackerStored);
+      const defender = sideUiFromSnapshot(defenderStored);
+
       return res.json({
         ok: true,
         outcome: outcomeForAttacker,
@@ -281,6 +325,8 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
         turns: Number(mAny.turns ?? mAny.timeline?.length ?? 0),
         alreadyResolved: true,
         runnerVersion: Number(mAny.runnerVersion ?? RUNNER_VERSION),
+        attacker,
+        defender,
       });
     }
 
@@ -331,6 +377,9 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
 
     await match.save();
 
+    const attacker = sideUiFromSnapshot((snapshots as any)?.[0] ?? mAny.attackerSnapshot);
+    const defender = sideUiFromSnapshot((snapshots as any)?.[1] ?? mAny.defenderSnapshot);
+
     return res.json({
       ok: true,
       outcome,
@@ -341,6 +390,8 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
       turns: timelineNorm.length,
       staminaAfter: spent.after, // snapshot de stamina luego de cobrar
       runnerVersion: RUNNER_VERSION,
+      attacker,
+      defender,
     });
   } catch (err: any) {
     console.error("POST /combat/resolve error:", err?.name, err?.message);

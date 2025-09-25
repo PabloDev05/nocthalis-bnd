@@ -8,7 +8,10 @@ import type { CharacterLean, ClassLean, EnemyLean } from "../types/lean";
 import { applyExperience } from "./progression.service";
 
 /** Lee el nombre de la clase desde el populate (si está) o usa un fallback. */
-function getPopulatedClassName(player: CharacterLean | null | undefined, fallback?: PlayerClassName): PlayerClassName | undefined {
+function getPopulatedClassName(
+  player: CharacterLean | null | undefined,
+  fallback?: PlayerClassName
+): PlayerClassName | undefined {
   const cls = player?.classId;
   if (cls && typeof cls === "object" && "name" in cls) {
     return (cls as ClassLean).name as PlayerClassName;
@@ -23,12 +26,14 @@ function getPopulatedClassName(player: CharacterLean | null | undefined, fallbac
  * Popula classId con campos relevantes para UI/loot.
  */
 export async function findCharacterById(id: string): Promise<CharacterLean | null> {
-  // OJO: ahora pedimos passiveDefaultSkill en vez de passiveDefault
-  const projection = "name passiveDefaultSkill subclasses";
+  const projection = "name passiveDefaultSkill subclasses"; // ✅ sin campos legacy
   const isObjId = Types.ObjectId.isValid(id);
 
   if (isObjId) {
-    const byDoc = await Character.findById(id).populate<{ classId: any }>("classId", projection).lean<CharacterLean>().exec();
+    const byDoc = await Character.findById(id)
+      .populate<{ classId: any }>("classId", projection)
+      .lean<CharacterLean>()
+      .exec();
     if (byDoc) return byDoc;
   }
 
@@ -46,10 +51,17 @@ export async function findCharacterById(id: string): Promise<CharacterLean | nul
 
 /**
  * PvE: aplica XP y loot, y devuelve el personaje refrescado + info de recompensas.
- * Nota: mantenemos el comportamiento original de NO tocar el oro del personaje,
- * solo devolvemos `goldGained` (si quieres que se sume al doc, avísame y lo agregamos).
+ * Nota: NO tocamos el oro del personaje aquí; devolvemos `goldGained`.
  */
-export async function grantRewardsAndLoot({ player, enemy, battleLog }: { player: CharacterLean; enemy: EnemyLean; battleLog?: string[] }) {
+export async function grantRewardsAndLoot({
+  player,
+  enemy,
+  battleLog,
+}: {
+  player: CharacterLean;
+  enemy: EnemyLean;
+  battleLog?: string[];
+}) {
   const doc = await Character.findById(player._id);
   if (!doc) throw new Error("Character not found to grant rewards");
 
@@ -63,7 +75,10 @@ export async function grantRewardsAndLoot({ player, enemy, battleLog }: { player
   const { level: afterLevel, experience: afterXP, levelUps } = await applyExperience(doc, xpGained);
 
   // 2) Loot según clase (nombre desde populate o fallback)
-  const playerClassName = getPopulatedClassName(player, (doc as any)?.classId?.name as PlayerClassName | undefined);
+  const playerClassName = getPopulatedClassName(
+    player,
+    (doc as any)?.classId?.name as PlayerClassName | undefined
+  );
   const drops = await rollLootForEnemy(enemy, playerClassName);
 
   // 3) Agregar al inventario (evitando duplicados)
@@ -78,8 +93,11 @@ export async function grantRewardsAndLoot({ player, enemy, battleLog }: { player
   // Guardamos nuevamente (applyExperience ya guardó level/exp)
   await doc.save();
 
-  // Refrescar representacion final con classId poblada (con passiveDefaultSkill)
-  const updated = await Character.findById(doc._id).populate<{ classId: any }>("classId", "name passiveDefaultSkill subclasses").lean<CharacterLean>().exec();
+  // Refrescar representación final con classId poblada (con passiveDefaultSkill)
+  const updated = await Character.findById(doc._id)
+    .populate<{ classId: any }>("classId", "name passiveDefaultSkill subclasses")
+    .lean<CharacterLean>()
+    .exec();
 
   if (DBG) {
     console.log("[REWARDS PvE] Aplicadas:", {
@@ -100,11 +118,20 @@ export async function grantRewardsAndLoot({ player, enemy, battleLog }: { player
 
 /**
  * PvP: aplica solo XP al atacante (no hay loot).
- * Mantiene tu comportamiento original.
+ * Mantiene el comportamiento actual.
  */
-export async function grantPvpExperience({ userId, xpGained }: { userId: string; xpGained: number }) {
+export async function grantPvpExperience({
+  userId,
+  xpGained,
+}: {
+  userId: string;
+  xpGained: number;
+}) {
   const isObjId = Types.ObjectId.isValid(userId);
-  const doc = (isObjId ? await Character.findOne({ userId: new Types.ObjectId(userId) }) : await Character.findOne({ userId })) || (await Character.findById(userId));
+  const doc =
+    (isObjId
+      ? await Character.findOne({ userId: new Types.ObjectId(userId) })
+      : await Character.findOne({ userId })) || (await Character.findById(userId));
 
   if (!doc) {
     if (DBG) console.warn("[REWARDS PvP] Character no encontrado para userId:", userId);
@@ -114,7 +141,10 @@ export async function grantPvpExperience({ userId, xpGained }: { userId: string;
   const beforeXP = doc.experience ?? 0;
   const beforeLevel = doc.level ?? 1;
 
-  const { level: afterLevel, experience: afterXP, levelUps } = await applyExperience(doc, Math.max(0, xpGained));
+  const { level: afterLevel, experience: afterXP, levelUps } = await applyExperience(
+    doc,
+    Math.max(0, xpGained)
+  );
 
   if (DBG) {
     console.log("[REWARDS PvP] XP aplicada:", {

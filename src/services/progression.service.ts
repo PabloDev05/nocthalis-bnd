@@ -1,4 +1,5 @@
 // src/services/progression.service.ts
+
 /** Nivel máximo (entero). Si no está en env, usa 100. */
 export const MAX_LEVEL: number = (() => {
   const raw = process.env.MAX_LEVEL;
@@ -8,31 +9,38 @@ export const MAX_LEVEL: number = (() => {
 
 /** Métricas de progresión (todo en enteros) */
 export type ProgressionMetrics = {
-  level: number; // nivel efectivo calculado con la XP
-  pendingLevels: number; // cuántos niveles supera al nivel guardado en DB
-  currentLevelAt: number; // XP acumulada al inicio del nivel actual
-  nextLevelAt: number; // XP acumulada necesaria para el siguiente nivel
-  xpSinceLevel: number; // XP ganada dentro del nivel actual
-  xpForThisLevel: number; // total de XP que abarca el nivel actual
-  xpToNext: number; // XP restante para subir (0 si es el máximo)
-  xpPercentInt: number; // progreso 0..100 (entero)
-  isMaxLevel: boolean; // true si está en el nivel tope
+  level: number;            // nivel efectivo calculado con la XP
+  pendingLevels: number;    // cuántos niveles supera al nivel guardado en DB
+  currentLevelAt: number;   // XP acumulada al inicio del nivel actual
+  nextLevelAt: number;      // XP acumulada necesaria para el siguiente nivel
+  xpSinceLevel: number;     // XP ganada dentro del nivel actual
+  xpForThisLevel: number;   // total de XP que abarca el nivel actual
+  xpToNext: number;         // XP restante para subir (0 si es el máximo)
+  xpPercentInt: number;     // progreso 0..100 (entero)
+  isMaxLevel: boolean;      // true si está en el nivel tope
 };
 
 /**
- * XP ACUMULADA requerida para ALCANZAR el nivel `level`.
- * level = 1 → 0;  level >= 2 → 100 + level^2 * 20
+ * XP ACUMULADA requerida para ALCANZAR el nivel `level` (monótona y suave).
+ * - L=1 → 0
+ * - Para L>=2, XP(L) = 20·(L-1)^2 + 100·(L-1)
+ *   Incremento por nivel: Δ(L) = 100 + 40·(L-2)  (L≥2)
  */
 export function xpNeededFor(level: number): number {
-  if (level <= 1) return 0;
-  return 100 + level * level * 20; // entero
+  const L = Math.max(1, Math.trunc(level || 1));
+  const k = L - 1;
+  return k * (100 + 20 * k); // 20k^2 + 100k
 }
 
 /**
  * Calcula la progresión efectiva desde XP real (no toca DB).
  * Devuelve solo enteros y porcentaje 0..100.
  */
-export function computeProgression(experience: number, levelInDb: number, maxLevel: number = MAX_LEVEL): ProgressionMetrics {
+export function computeProgression(
+  experience: number,
+  levelInDb: number,
+  maxLevel: number = MAX_LEVEL
+): ProgressionMetrics {
   const expRaw = Math.max(0, Math.trunc(experience ?? 0));
   const lvlDb = Math.max(1, Math.trunc(levelInDb ?? 1));
 
@@ -51,7 +59,7 @@ export function computeProgression(experience: number, levelInDb: number, maxLev
   const nextLevelAt = isMaxLevel ? currentLevelAt : xpNeededFor(level + 1);
 
   const xpForThisLevel = Math.max(1, nextLevelAt - currentLevelAt); // ancho del nivel
-  let xpSinceLevel = Math.max(0, exp - currentLevelAt); // progreso dentro del nivel
+  let xpSinceLevel = Math.max(0, exp - currentLevelAt);             // progreso dentro del nivel
   if (isMaxLevel) xpSinceLevel = Math.min(xpSinceLevel, xpForThisLevel);
 
   const xpToNext = isMaxLevel ? 0 : Math.max(0, nextLevelAt - exp);

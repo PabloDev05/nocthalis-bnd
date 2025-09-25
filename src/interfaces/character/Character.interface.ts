@@ -16,8 +16,8 @@ export interface Equipment {
 
 /**
  * DTO canónico de Character para API/servicios.
- * Nota: reflejamos el modelo Mongoose actual (Fate + stamina),
- * pero algunas props quedan opcionales para no romper UIs antiguas.
+ * - Todos los números son ENTEROS.
+ * - `stats` usa el shape nuevo con `constitution` (no `vitality`) y `fate`.
  */
 export interface Character {
   /** IDs como strings para DTOs / API */
@@ -36,23 +36,23 @@ export interface Character {
   experience: number;
 
   /** Fuente de verdad del personaje */
-  stats: BaseStats; // incluye 'fate'
-  resistances: Resistances;
-  combatStats: CombatStats; // requerido en el modelo → mantenemos requerido aquí
+  stats: BaseStats;          // incluye constitution y fate (enteros)
+  resistances: Resistances;  // enteros 0..100 con cap en lógica de negocio
+  combatStats: CombatStats;  // enteros (maxHP, attackPower, etc.)
 
   /** Vida actual (persistida fuera de combate para UI) */
   currentHP?: number;
 
   /** Progresión/colección */
-  /** @deprecated Ya no se persiste; mantener opcional por compatibilidad de front antiguo */
+  /** @deprecated Mantener opcional por compatibilidad de front antiguo */
   passivesUnlocked?: string[];
   inventory: string[];
   equipment: Equipment;
 
   /** Stamina (top-level, alineado al modelo). Opcionales en DTO para compat. */
-  stamina?: number; // 0..staminaMax
-  staminaMax?: number; // tope (ej: 100)
-  staminaRegenPerHour?: number; // si 0/undefined, servicio usa “llenado en 24h”
+  stamina?: number;              // 0..staminaMax
+  staminaMax?: number;           // tope (ej: 100)
+  staminaRegenPerHour?: number;  // si 0/undefined, política por defecto
   staminaUpdatedAt?: Date | string; // ISO/Date de última actualización
 
   /** timestamps del doc (opcionales en DTOs/lean) */
