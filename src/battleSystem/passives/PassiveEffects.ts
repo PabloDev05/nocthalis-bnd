@@ -98,6 +98,7 @@ function sumModifiers(passives: Passive[]): { stats: PartialStats; combat: Parti
     // Stats de combate (enteros, % en puntos)
     (["maxHP", "attackPower", "magicPower", "criticalChance", "criticalDamageBonus", "evasion", "blockChance", "blockValue", "lifeSteal", "damageReduction", "movementSpeed"] as const).forEach((k) => {
       const v = toInt((m as any)[k], 0);
+
       if (v) (combat as any)[k] = toInt(((combat as any)[k] ?? 0) + v, 0);
     });
   }

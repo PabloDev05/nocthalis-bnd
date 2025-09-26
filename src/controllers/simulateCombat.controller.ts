@@ -1,12 +1,5 @@
-/* eslint-disable no-console */
 // Simulación y resolución de combates PvP (nuevo sistema)
 // src/controllers/simulateCombat.controller.ts
-// - Resolve YA NO cobra stamina (el cobro ocurre en /arena/challenges)
-// - Preview público (cualquiera puede ver la simulación de un match)
-// - Guarda log y snapshots del combate en el match
-// - Actualiza stats de personajes y usuarios
-// - No guarda historial de combate (CombatResult) como en el sistema viejo
-// - No soporta PvE (usar /combat/preview y /combat/resolve del sistema viejo)
 
 import type { RequestHandler } from "express";
 import { Types } from "mongoose";
@@ -17,7 +10,18 @@ import { computeProgression } from "../services/progression.service";
 import { TimelineEvent } from "../battleSystem/pvp/pvpRunner";
 
 /** Versión de runner (Fate/procs/ultimate) */
-const RUNNER_VERSION = 3; // ↑ bump por fixes de roles y blockedAmount
+const RUNNER_VERSION = 4; // ↑ bump: DOT visible + turns del runner + finalHP
+
+/* ───────────────── helpers de log ───────────────── */
+const safeId = (v: any) => {
+  try {
+    const s = String(v ?? "");
+    return s.length > 10 ? `${s.slice(0, 6)}…${s.slice(-4)}` : s;
+  } catch {
+    return String(v ?? "");
+  }
+};
+const asBool = (v: any) => (v ? "true" : "false");
 
 function mapOutcomeForMatch(outcome: "win" | "lose" | "draw") {
   return outcome === "win" ? "attacker" : outcome === "lose" ? "defender" : "draw";
@@ -50,9 +54,14 @@ const POINTS_FIELDS = ["availablePoints", "statPoints", "unallocatedPoints", "po
 const ATTR_POINTS_PER_LEVEL = 5;
 
 async function applyRewardsToCharacter(charId: any | undefined, userId: any | undefined, rw: { xp?: number; gold?: number; honorDelta?: number }) {
+  console.log(`[PVP][Rewards] apply → charId=${safeId(charId)} userId=${safeId(userId)} rw=`, rw);
+
   let doc = (charId && (await Character.findById(charId))) || (userId && (await Character.findOne({ userId })));
 
-  if (!doc) return { updated: false };
+  if (!doc) {
+    console.log(`[PVP][Rewards] character NOT FOUND for charId=${safeId(charId)} userId=${safeId(userId)}`);
+    return { updated: false };
+  }
 
   // sumas planas
   if (typeof (doc as any).experience === "number" && typeof rw.xp === "number") {
@@ -83,13 +92,15 @@ async function applyRewardsToCharacter(charId: any | undefined, userId: any | un
         break;
       }
     }
+    console.log(`[PVP][Rewards] level up → ${prevLevel} → ${newLevel} (+${gained} pts)`);
   }
 
   await doc.save();
+  console.log(`[PVP][Rewards] character updated OK: ${safeId((doc as any)?._id)}`);
   return { updated: true, characterId: (doc as any)._id };
 }
 
-/* Normalización timeline (además infiere blockedAmount cuando es posible) */
+/* Normalización timeline (mapea dot_tick→dot e infiere blockedAmount) */
 function normalizeTimeline(items: any[]) {
   const arr = Array.isArray(items) ? items : [];
   return arr.map((it, idx) => {
@@ -101,9 +112,8 @@ function normalizeTimeline(items: any[]) {
 
     const ev = (it.event as TimelineEvent) || "hit";
 
-    // Final y raw por si vienen desde el runner/manager
+    // Final y raw
     const finalDamage = Number.isFinite(Number(it.damage?.final)) ? Number(it.damage.final) : Number.isFinite(Number(it.damage)) ? Number(it.damage) : 0;
-
     const rawDamage = Number(it.rawDamage ?? it.damage?.raw ?? it.damageRaw ?? it.intendedDamage ?? it.baseDamage ?? it.preMitigation ?? 0);
 
     const blockedExplicit = it.breakdown?.blockedAmount ?? it.blockedAmount ?? (typeof it.tags === "object" && !Array.isArray(it.tags) ? (it.tags as any).blockedAmount : undefined);
@@ -116,10 +126,11 @@ function normalizeTimeline(items: any[]) {
 
     // Eventos “no impacto”
     if (ev === "passive_proc" || ev === "ultimate_cast" || ev === "dot_tick") {
+      const uiEvent: any = ev === "dot_tick" ? "dot" : ev;
       return {
         turn,
         source,
-        event: ev,
+        event: uiEvent,
         damage: Math.max(0, finalDamage),
         attackerHP,
         defenderHP,
@@ -151,7 +162,6 @@ function normalizeTimeline(items: any[]) {
     if (Number.isFinite(rawDamage)) base.rawDamage = Math.max(0, Math.round(rawDamage));
     if (Number.isFinite(blockedAmount)) {
       base.breakdown = { ...(it.breakdown || {}), blockedAmount: blockedAmount as number };
-      // ayuda extra para front que lee tags.obj
       if (base.tags && typeof base.tags === "object" && !Array.isArray(base.tags)) {
         (base.tags as any).blockedAmount = blockedAmount;
       }
@@ -163,100 +173,127 @@ function normalizeTimeline(items: any[]) {
 
 /* ---------------- GET /combat/simulate (preview público) ---------------- */
 export const simulateCombatPreviewController: RequestHandler = async (req, res) => {
+  const matchId = String(req.query.matchId || "");
+  console.log(`[PVP][GET /combat/simulate] preview hit matchId=${safeId(matchId)} auth=${asBool(!!req.user)}`);
   try {
-    const matchId = String(req.query.matchId || "");
     if (!matchId || !Types.ObjectId.isValid(matchId)) {
+      console.log(`[PVP][GET preview] 400 invalid matchId`);
       return res.status(400).json({ ok: false, message: "matchId inválido" });
     }
 
     const match = await Match.findById(matchId).lean();
-    if (!match) return res.status(404).json({ ok: false, message: "Match no encontrado" });
+    if (!match) {
+      console.log(`[PVP][GET preview] 404 match not found`);
+      return res.status(404).json({ ok: false, message: "Match no encontrado" });
+    }
 
-    const { outcome, timeline, log, snapshots } = runPvp({
+    console.time(`[PVP][GET preview] runPvp ${safeId(matchId)}`);
+    const { outcome, timeline, log, snapshots, turns, finalHP } = runPvp({
       attackerSnapshot: (match as any).attackerSnapshot,
       defenderSnapshot: (match as any).defenderSnapshot,
       seed: (match as any).seed,
-      maxRounds: 30,
-    });
+    } as any);
+    console.timeEnd(`[PVP][GET preview] runPvp ${safeId(matchId)}`);
 
     const timelineNorm = normalizeTimeline(timeline);
 
+    console.log(`[PVP][GET preview] OK outcome=${outcome} turns=${turns} seed=${(match as any).seed}`);
     return res.json({
       ok: true,
       outcome,
-      turns: timelineNorm.length,
+      turns,
       timeline: timelineNorm,
       log,
       snapshots,
+      finalHP,
       runnerVersion: RUNNER_VERSION,
     });
   } catch (err) {
-    console.error("GET /combat/simulate (preview) error:", err);
+    console.error("[PVP][GET preview] error:", err);
     return res.status(500).json({ ok: false, message: "Error interno" });
   }
 };
 
 /* ---------------- POST /combat/simulate (preview, auth) ---------------- */
 export const simulateCombatController: RequestHandler = async (req, res) => {
+  const { matchId } = (req.body || {}) as { matchId?: string };
+  console.log(`[PVP][POST /combat/simulate] hit user=${safeId(req.user?.id)} matchId=${safeId(matchId)}`);
   try {
-    const { matchId } = req.body as { matchId?: string };
     if (!matchId || !Types.ObjectId.isValid(matchId)) {
+      console.log(`[PVP][POST simulate] 400 invalid matchId`);
       return res.status(400).json({ ok: false, message: "matchId inválido" });
     }
 
     const match = await Match.findById(matchId).lean();
-    if (!match) return res.status(404).json({ ok: false, message: "Match no encontrado" });
+    if (!match) {
+      console.log(`[PVP][POST simulate] 404 match not found`);
+      return res.status(404).json({ ok: false, message: "Match no encontrado" });
+    }
 
-    const { outcome, timeline, log, snapshots } = runPvp({
+    console.time(`[PVP][POST simulate] runPvp ${safeId(matchId)}`);
+    const { outcome, timeline, log, snapshots, turns, finalHP } = runPvp({
       attackerSnapshot: (match as any).attackerSnapshot,
       defenderSnapshot: (match as any).defenderSnapshot,
       seed: (match as any).seed,
-      maxRounds: 30,
-    });
+    } as any);
+    console.timeEnd(`[PVP][POST simulate] runPvp ${safeId(matchId)}`);
 
     const timelineNorm = normalizeTimeline(timeline);
 
+    console.log(`[PVP][POST simulate] OK outcome=${outcome} turns=${turns}`);
     return res.json({
       ok: true,
       outcome,
-      turns: timelineNorm.length,
+      turns,
       timeline: timelineNorm,
       log,
       snapshots,
+      finalHP,
       runnerVersion: RUNNER_VERSION,
     });
   } catch (err) {
-    console.error("POST /combat/simulate error:", err);
+    console.error("[PVP][POST simulate] error:", err);
     return res.status(500).json({ ok: false, message: "Error interno" });
   }
 };
 
 /* ---------------- POST /combat/resolve ---------------- */
 export const resolveCombatController: RequestHandler = async (req, res) => {
-  try {
-    const callerUserId = req.user?.id;
-    if (!callerUserId) return res.status(401).json({ ok: false, message: "No autenticado" });
+  const callerUserId = req.user?.id;
+  const { matchId } = (req.body || {}) as { matchId?: string };
+  console.log(`[PVP][POST /combat/resolve] hit user=${safeId(callerUserId)} matchId=${safeId(matchId)}`);
 
-    const { matchId } = req.body as { matchId?: string };
+  try {
+    if (!callerUserId) {
+      console.log("[PVP][resolve] 401 not authenticated");
+      return res.status(401).json({ ok: false, message: "No autenticado" });
+    }
+
     if (!matchId || !Types.ObjectId.isValid(matchId)) {
+      console.log("[PVP][resolve] 400 invalid matchId");
       return res.status(400).json({ ok: false, message: "matchId inválido" });
     }
 
     const match = await Match.findById(matchId);
-    if (!match) return res.status(404).json({ ok: false, message: "Match no encontrado" });
+    if (!match) {
+      console.log("[PVP][resolve] 404 match not found");
+      return res.status(404).json({ ok: false, message: "Match no encontrado" });
+    }
 
     const mAny = match as any;
 
     // Solo el atacante puede resolver su match
     if (String(mAny.attackerUserId) !== String(callerUserId)) {
+      console.log(`[PVP][resolve] 403 forbidden: attackerUserId=${safeId(mAny.attackerUserId)} caller=${safeId(callerUserId)}`);
       return res.status(403).json({ ok: false, message: "No autorizado" });
     }
 
-    // Idempotente: si ya está resuelto devolvemos lo guardado
+    // Idempotente
     if (mAny.status === "resolved") {
       const storedOutcome = (mAny.outcome ?? "draw") as "attacker" | "defender" | "draw";
       const outcomeForAttacker: "win" | "lose" | "draw" = storedOutcome === "attacker" ? "win" : storedOutcome === "defender" ? "lose" : "draw";
 
+      console.log(`[PVP][resolve] already-resolved outcome=${storedOutcome} turns=${mAny.turns}`);
       return res.json({
         ok: true,
         outcome: outcomeForAttacker,
@@ -265,22 +302,25 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
         snapshots: Array.isArray(mAny.snapshots) ? mAny.snapshots : [],
         log: Array.isArray(mAny.log) ? mAny.log : [],
         turns: Number(mAny.turns ?? mAny.timeline?.length ?? 0),
+        finalHP: mAny.finalHP ?? undefined,
         alreadyResolved: true,
         runnerVersion: Number(mAny.runnerVersion ?? RUNNER_VERSION),
       });
     }
 
-    // ⛔️ Ya NO se descuenta stamina aquí. El gasto se hace en /arena/challenges.
-
-    const { outcome, timeline, log, snapshots } = runPvp({
+    // Ejecutar combate
+    console.time(`[PVP][resolve] runPvp ${safeId(matchId)}`);
+    const { outcome, timeline, log, snapshots, turns, finalHP } = runPvp({
       attackerSnapshot: mAny.attackerSnapshot,
       defenderSnapshot: mAny.defenderSnapshot,
       seed: mAny.seed,
-      maxRounds: 30,
-    });
+    } as any);
+    console.timeEnd(`[PVP][resolve] runPvp ${safeId(matchId)}`);
 
     const timelineNorm = normalizeTimeline(timeline);
     const rw = computePvpRewards(outcome);
+
+    console.log(`[PVP][resolve] outcome=${outcome} turns=${turns} seed=${mAny.seed} final=${finalHP.attacker}/${finalHP.defender}`);
 
     // Aplicar recompensas a ambos personajes
     const att = mAny.attackerSnapshot || {};
@@ -291,7 +331,7 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
     mAny.status = "resolved";
     mAny.outcome = mapOutcomeForMatch(outcome);
     mAny.winner = outcome === "win" ? "player" : outcome === "lose" ? "enemy" : "draw";
-    mAny.turns = timelineNorm.length;
+    mAny.turns = turns;
     mAny.rewards = {
       xp: rw.responseForAttacker.xpGained,
       gold: rw.responseForAttacker.goldGained,
@@ -300,9 +340,11 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
     mAny.timeline = timelineNorm;
     mAny.snapshots = Array.isArray(snapshots) ? snapshots : [];
     mAny.log = Array.isArray(log) ? log : [];
+    mAny.finalHP = finalHP; // ← útil para UI
     mAny.runnerVersion = RUNNER_VERSION;
 
     await match.save();
+    console.log(`[PVP][resolve] saved OK match=${safeId(matchId)} outcome=${outcome} turns=${turns}`);
 
     return res.json({
       ok: true,
@@ -311,11 +353,12 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
       timeline: timelineNorm,
       snapshots,
       log,
-      turns: timelineNorm.length,
+      turns,
+      finalHP,
       runnerVersion: RUNNER_VERSION,
     });
   } catch (err: any) {
-    console.error("POST /combat/resolve error:", err?.name, err?.message);
+    console.error("[PVP][resolve] error:", err?.name, err?.message);
     return res.status(500).json({ ok: false, message: "Error interno" });
   }
 };

@@ -26,7 +26,7 @@ export type CharacterSnapshot = {
   maxHP: number;
   currentHP: number;
 
-  // ---- Bloque de combate (tal cual esté en el personaje; porcentajes en puntos %)
+  // ---- Bloque de combate (porcentajes en puntos %)
   combat: {
     attackPower: number;
     magicPower: number;
@@ -38,10 +38,10 @@ export type CharacterSnapshot = {
     maxHP?: number; // redundante
   };
 
-  // Por compat con código que mira "combatStats" en vez de "combat"
+  // Compat: algunos sitios miran "combatStats"
   combatStats: CharacterSnapshot["combat"];
 
-  // ---- Metadata de clase para runner/UI (Fate procs y arma por defecto)
+  // ---- Metadata de clase (para runner/UI)
   class?: {
     name: string;
     defaultWeapon?: string;
@@ -71,7 +71,7 @@ export type CharacterSnapshot = {
       cooldownTurns: number;
       effects?: {
         bonusDamagePercent?: number;
-        applyDebuff?: string; // StatusKey si querés tiparlo
+        applyDebuff?: string;
         debuffValue?: number;
         bleedDamagePerTurn?: number;
         debuffDurationTurns?: number;
@@ -92,7 +92,6 @@ export type CharacterSnapshot = {
 };
 
 /* ───────────────── helpers ───────────────── */
-
 const toNum = (v: any, d = 0) => {
   if (typeof v === "string") {
     const s = v.replace?.("%", "").replace?.(",", ".") ?? v;
@@ -143,7 +142,7 @@ function selectWeaponSlug(character: any, classDefaultWeapon?: string): string {
 function normalizeStatsConstitution(stats: Record<string, any>): Record<string, number> {
   const out: Record<string, number> = {};
   for (const [k, v] of Object.entries(stats || {})) {
-    if (k === "vitality") continue; // se descarta (se mapeará abajo)
+    if (k === "vitality") continue; // legacy fuera
     out[k] = toNum(v, 0);
   }
   // mapear vitality -> constitution si viniera legacy
@@ -151,14 +150,13 @@ function normalizeStatsConstitution(stats: Record<string, any>): Record<string, 
   if (Number.isFinite(vit)) {
     out.constitution = Math.max(out.constitution ?? 0, vit);
   }
-  // asegurar claves importantes presentes
+  // claves importantes
   out.fate = toNum(out.fate, 0);
   out.constitution = toNum(out.constitution, 0);
   return out;
 }
 
 /* ───────────────── builder ───────────────── */
-
 export function buildCharacterSnapshot(character: any): CharacterSnapshot {
   // Identidad
   const userId = character?.userId ?? character?.user?._id ?? character?.user?.id;
@@ -167,14 +165,39 @@ export function buildCharacterSnapshot(character: any): CharacterSnapshot {
   const name = character?.name ?? username ?? "—";
 
   // Clase: string o doc poblado
-  const classDoc = character?.classId && typeof character.classId === "object" && character.classId.name ? character.classId : character?.class;
+  const classDoc = character?.classId && typeof character.classId === "object" && (character.classId as any).name ? character.classId : character?.class;
 
   const className = String(classDoc?.name ?? character?.className ?? "—");
   const defaultWeapon = classDoc?.defaultWeapon ? String(classDoc.defaultWeapon) : undefined;
   const primaryWeapons = Array.isArray(classDoc?.primaryWeapons) ? classDoc.primaryWeapons.slice() : undefined;
   const secondaryWeapons = Array.isArray(classDoc?.secondaryWeapons) ? classDoc.secondaryWeapons.slice() : undefined;
+
+  // Habilidades (pueden venir incompletas)
   const passiveDefaultSkill = classDoc?.passiveDefaultSkill ?? null;
   const ultimateSkill = classDoc?.ultimateSkill ?? null;
+
+  // Normalizaciones suaves
+  const passiveNorm = passiveDefaultSkill
+    ? {
+        enabled: passiveDefaultSkill.enabled !== false,
+        ...passiveDefaultSkill,
+      }
+    : null;
+
+  const ultimateNorm = ultimateSkill
+    ? {
+        enabled: ultimateSkill.enabled !== false,
+        cooldownTurns: Number.isFinite(+ultimateSkill.cooldownTurns) ? +ultimateSkill.cooldownTurns : 0,
+        ...ultimateSkill,
+        proc: ultimateSkill.proc
+          ? {
+              enabled: ultimateSkill.proc.enabled !== false,
+              respectCooldown: !!ultimateSkill.proc.respectCooldown,
+              ...ultimateSkill.proc,
+            }
+          : undefined,
+      }
+    : null;
 
   const level = toNum(character?.level, 1);
 
@@ -199,7 +222,7 @@ export function buildCharacterSnapshot(character: any): CharacterSnapshot {
   const maxHP = clampInt(character?.maxHP ?? combat.maxHP, 1, 10_000_000);
   const currentHP = clampInt(character?.currentHP ?? maxHP, 0, maxHP);
 
-  // Stats/resist/equipment (stats normaliza constitution)
+  // Stats/resist/equipment
   const stats = normalizeStatsConstitution({ ...(character?.stats ?? {}) });
   const resistances = { ...(character?.resistances ?? {}) } as Record<string, number>;
   const equipment = { ...(character?.equipment ?? {}) } as Record<string, unknown>;
@@ -230,8 +253,8 @@ export function buildCharacterSnapshot(character: any): CharacterSnapshot {
       defaultWeapon,
       primaryWeapons,
       secondaryWeapons,
-      passiveDefaultSkill,
-      ultimateSkill,
+      passiveDefaultSkill: passiveNorm,
+      ultimateSkill: ultimateNorm,
     },
   };
 
