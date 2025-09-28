@@ -8,7 +8,7 @@ const router = Router();
 
 router.get("/", requireAuth, getMyStamina);
 router.post("/use", requireAuth, useStamina);
-router.post("/stamina/use-action", requireAuth, useStaminaAction); 
+router.post("/use-action", requireAuth, useStaminaAction);
 router.post("/admin/set", requireAuth, adminSetStamina);
 
 export default router;

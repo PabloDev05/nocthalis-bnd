@@ -1,244 +1,36 @@
-// PvP táctico, cálculos ENTEROS y simples, Fate visible y con "pity system".
-
-import type { WeaponData } from "./Weapon";
-import { isPrimaryWeapon, PRIMARY_WEAPON_BONUS_MULT } from "./Weapon";
+// PvP táctico modularizado. Mantiene API pública intacta.
+// No tiene dependencias fuera de battleSystem (salvo constantes).
+// Usa StatusEngine para manejar estados y resistencias.
+// Usa RNG inyectable (por defecto Math.random, pero puede ser determinístico).
+// Usa snapshots de CharacterSnapshot (copia simple de valores).
 import { StatusEngine, type Side } from "./StatusEngine";
+import { isPrimaryWeapon } from "./CombatWeapons";
+
+import {
+  BLOCK_REDUCTION_PERCENT,
+  CRIT_DEFAULT_BONUS_PERCENT,
+  CRIT_DEFAULT_CHANCE_PERCENT,
+  MAG_DEF_SOFTCAP,
+  PASSIVE_PITY_AFTER_FAILS,
+  PHYS_DEF_SOFTCAP,
+  SHIELD_BLOCK_BONUS_PERCENT,
+  SHIELD_DR_BONUS_PERCENT,
+  ULT_COOLDOWN_TURNS,
+  ULT_DAMAGE_MAIN_MULT,
+  ULT_DAMAGE_WEAPON_PART,
+  ULT_EXTRA_FLAT,
+  ULT_PITY_AFTER_FAILS,
+  DEBUG_PROC,
+} from "./CombatConfig";
+
+import { AttackOutput, CombatEvent, CombatSide, DamageFlavor, PassiveTriggerCheck, SideKey, UltimateEffects, UltimateRuntime } from "./CombatTypes";
+
+import { asInt, clamp, pct, roll100, toPct } from "./CombatMath";
+import { attackFlavor, elementKey, isRanged, weaponCategory } from "./CombatFlavor";
+import { applyOrRefreshPassiveRuntime, passiveChance, ultimateChance } from "./CombatProcs";
+import { rollMainWeapon, rollOffhand } from "./CombatWeapons";
+
 import { STATUS_CATALOG, isStatusKey, type StatusKey } from "../constants/status";
-
-/* ────────────────────────────────────────────────────────────────────── */
-/*                             PARÁMETROS                                */
-/* ────────────────────────────────────────────────────────────────────── */
-
-const DEBUG_PROC = false;
-
-/** Bloqueo reduce este porcentaje del daño (entero 0..100) */
-const BLOCK_REDUCTION_PERCENT = 50;
-
-/** Softcaps de defensa (valores ENTEROS) */
-const PHYS_DEF_SOFTCAP = 40;
-const MAG_DEF_SOFTCAP = 40;
-
-/** Bonos de escudo (enteros %) */
-const SHIELD_BLOCK_BONUS_PERCENT = 5;
-const SHIELD_DR_BONUS_PERCENT = 3;
-
-/** Crítico base si falta dato (enteros %) y bonus daño crit (enteros %) */
-const CRIT_DEFAULT_CHANCE_PERCENT = 5;
-const CRIT_DEFAULT_BONUS_PERCENT = 40;
-
-/** Caps de procs y escalado por Fate (enteros) */
-const PASSIVE_BASE_CHANCE = 5; // %
-const PASSIVE_PER_FATE = 2; // % por punto de Fate
-const PASSIVE_MAX_CHANCE = 50; // %
-const PASSIVE_PITY_AFTER_FAILS = 6; // garantía tras N fallos seguidos
-
-const ULT_BASE_CHANCE = 2; // %
-const ULT_PER_FATE = 1; // % por punto de Fate
-const ULT_MAX_CHANCE = 25; // %
-const ULT_COOLDOWN_TURNS = 4; // CD fijo (entero ≥ 1)
-const ULT_PITY_AFTER_FAILS = 8; // garantía tras N turnos sin lanzar
-
-/** Daño base de Ultimate (enteros) */
-const ULT_DAMAGE_MAIN_MULT = 3; // multiplica el stat base
-const ULT_DAMAGE_WEAPON_PART = 1; // agrega min+max/2 aproximado arma
-const ULT_EXTRA_FLAT = 0; // flat extra (puedes ajustar)
-
-/** Contribuciones de offhand (enteros %) */
-const OFFHAND_WEAPON_CONTRIB_PERCENT = 35;
-const OFFHAND_FOCUS_CONTRIB_PERCENT = 15;
-
-/* ────────────────────────────────────────────────────────────────────── */
-/*                                TIPOS                                  */
-/* ────────────────────────────────────────────────────────────────────── */
-
-export type PassiveTriggerCheck = "onBasicHit" | "onRangedHit" | "onSpellCast" | "onHitOrBeingHit";
-export type DamageFlavor = "physical" | "magical";
-
-export interface PassiveTrigger {
-  check: PassiveTriggerCheck;
-  scaleBy: "fate";
-  baseChancePercent: number;
-  fateScalePerPoint: number;
-  maxChancePercent: number;
-}
-export interface PassiveExtraEffects {
-  evasionFlat?: number; // % entero
-  magicPowerFlat?: number; // entero
-  blockChancePercent?: number; // % entero
-  criticalChancePercent?: number; // % entero
-}
-export interface PassiveConfig {
-  enabled: boolean;
-  name: string;
-  damageType: DamageFlavor;
-  shortDescEn?: string;
-  longDescEn?: string;
-  trigger: PassiveTrigger;
-  durationTurns: number; // entero
-  bonusDamage: number; // entero
-  extraEffects?: PassiveExtraEffects;
-}
-interface PassiveRuntime {
-  active: boolean;
-  remainingTurns: number; // entero
-  bonusDamage: number; // entero
-  effects: Required<PassiveExtraEffects>;
-}
-
-type UltimateTriggerCheck = "onTurnStart";
-export interface UltimateTrigger {
-  check: UltimateTriggerCheck;
-  scaleBy: "fate";
-  baseChancePercent: number;
-  fateScalePerPoint: number;
-  maxChancePercent: number;
-}
-export type UltimateDebuff = "weaken" | "fear" | "silence" | "curse" | "bleed";
-export interface UltimateEffects {
-  bonusDamagePercent?: number;
-  applyDebuff?: UltimateDebuff;
-  debuffValue?: number;
-  debuffDurationTurns?: number;
-  bleedDamagePerTurn?: number;
-}
-export interface UltimateConfig {
-  enabled: boolean;
-  name: string;
-  description?: string;
-  cooldownTurns: number;
-  effects: UltimateEffects;
-  proc: {
-    enabled: boolean;
-    trigger: UltimateTrigger;
-    respectCooldown: boolean;
-  };
-}
-interface UltimateRuntime {
-  cooldown: number; // entero ≥ 0
-  failStreak: number;
-}
-
-export type SideKey = "player" | "enemy";
-
-export interface CombatSide {
-  name: string;
-  className?: string;
-
-  maxHP: number;
-  currentHP: number;
-
-  baseStats?: { [k: string]: number };
-  stats?: Record<string, number>;
-  resistances?: Record<string, number>;
-  equipment?: Record<string, unknown>;
-
-  combat: {
-    attackPower: number;
-    magicPower: number;
-    evasion: number; // 0..1 o %
-    blockChance: number; // 0..1 o %
-    damageReduction: number; // 0..1 o %
-    criticalChance: number; // 0..1 o %
-    criticalDamageBonus: number; // % o fracción
-    maxHP?: number;
-  };
-
-  weaponMain?: WeaponData;
-  weaponOff?: WeaponData | null;
-
-  classMeta?: { primaryWeapons?: string[] };
-
-  passiveDefaultSkill?: PassiveConfig;
-  ultimateSkill?: UltimateConfig;
-
-  _passiveRuntime__?: PassiveRuntime | null;
-  _passiveFailStreak__?: number;
-
-  _ultimateRuntime__?: UltimateRuntime | null;
-}
-
-/* ────────────────────────────────────────────────────────────────────── */
-/*                           EVENTOS Y SALIDA                             */
-/* ────────────────────────────────────────────────────────────────────── */
-
-export type CombatEvent =
-  | { type: "miss"; actor: "player" | "enemy" }
-  | { type: "block"; actor: "player" | "enemy" }
-  | { type: "crit"; actor: "player" | "enemy" }
-  | { type: "ultimate_cast"; actor: "player" | "enemy"; name: string; chance: number; roll: number; forcedByPity?: boolean }
-  | {
-      type: "passive_proc";
-      actor: "player" | "enemy";
-      name: string;
-      trigger: PassiveTriggerCheck;
-      chancePercent: number;
-      roll: number;
-      result: "activated" | "refreshed" | "failed";
-      remainingTurns?: number;
-      duration?: number;
-      forcedByPity?: boolean;
-    }
-  | {
-      type: "hit";
-      actor: "player" | "enemy";
-      flavor: DamageFlavor;
-      vfx: string;
-      damage: {
-        final: number;
-        breakdown: {
-          mainRoll: number;
-          offRoll: number;
-          baseStat: number;
-          passiveBonus: number;
-          defenseFactor: number; // 0..100 %
-          elementFactor?: number; // 0..100 %
-          critBonusPercent: number; // %
-          blockReducedPercent: number; // %
-          drReducedPercent: number; // %
-          preBlock?: number;
-          blockedAmount?: number;
-          ultimateDamage?: number;
-        };
-      };
-    }
-  | {
-      type: "dot_tick";
-      actor: "player" | "enemy";
-      victim: "player" | "enemy";
-      key: "bleed" | "poison" | "burn";
-      damage: number;
-      vfx: "bleed-tick" | "poison-tick" | "burn-tick";
-    };
-
-/* ────────────────────────────────────────────────────────────────────── */
-/*                           HELPERS ENTEROS                              */
-/* ────────────────────────────────────────────────────────────────────── */
-
-const asInt = (n: number) => Math.trunc(Number(n) || 0);
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, asInt(v)));
-const pct = (x: number) => clamp(x, 0, 100);
-const toPct = (v: unknown) => {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return 0;
-  if (n <= 1 && n >= 0) return clamp(n * 100, 0, 100);
-  return pct(n);
-};
-const roll100 = (rng: () => number) => Math.floor(rng() * 100) + 1;
-
-/* ────────────────────────────────────────────────────────────────────── */
-/*                         CLASE PRINCIPAL                                */
-/* ────────────────────────────────────────────────────────────────────── */
-
-export interface AttackFlags {
-  miss?: boolean;
-  blocked?: boolean;
-  crit?: boolean;
-}
-export interface AttackOutput {
-  damage: number;
-  flags: AttackFlags;
-  events?: CombatEvent[];
-}
 
 export class CombatManager {
   public player: CombatSide;
@@ -270,7 +62,7 @@ export class CombatManager {
     this.player._ultimateRuntime__ = { cooldown: 0, failStreak: 0 };
     this.enemy._ultimateRuntime__ = { cooldown: 0, failStreak: 0 };
 
-    // StatusEngine con resistencias del objetivo (type-safe)
+    // StatusEngine con resistencias y catálogo type-safe
     this.SE = new StatusEngine(
       this.rng,
       (side, key) => {
@@ -314,7 +106,6 @@ export class CombatManager {
     }
   }
 
-  // ❌ NO más límite de rondas ni tolerancias: sólo acaba por HP=0
   isCombatOver(): boolean {
     return this.player.currentHP <= 0 || this.enemy.currentHP <= 0;
   }
@@ -326,7 +117,6 @@ export class CombatManager {
     return null;
   }
 
-  // (opcional) helper para que quien llama pueda leer HP actuales
   public getHPs() {
     return { playerHP: Math.max(0, this.player.currentHP), enemyHP: Math.max(0, this.enemy.currentHP) };
   }
@@ -349,7 +139,7 @@ export class CombatManager {
 
     const A = attackerKey === "player" ? this.player : this.enemy;
 
-    // 1) Intentar Ultimate al inicio del turno del atacante
+    // 1) Ultimate al inicio del turno
     const ult = this.tryUltimate(attackerKey, defenderKey, events);
     if (ult) {
       if (DEBUG_PROC) console.debug("[ULT HIT]", A.name, "dmg=", ult.damage);
@@ -370,9 +160,9 @@ export class CombatManager {
   }
   private blockPct(side: CombatSide, withShield: boolean, withPassive = true): number {
     const base = toPct(side.combat.blockChance);
-    const addPsv = withPassive && side._passiveRuntime__?.active ? toPct(side._passiveRuntime__!.effects.blockChancePercent) : 0;
+    const addPv = withPassive && side._passiveRuntime__?.active ? toPct(side._passiveRuntime__!.effects.blockChancePercent) : 0;
     const addSh = withShield ? SHIELD_BLOCK_BONUS_PERCENT : 0;
-    return pct(base + addPsv + addSh);
+    return pct(base + addPv + addSh);
   }
   private critPct(side: CombatSide, withPassive = true): number {
     const base = toPct(side.combat.criticalChance || CRIT_DEFAULT_CHANCE_PERCENT);
@@ -408,42 +198,11 @@ export class CombatManager {
     return Math.max(0, asInt(side.stats?.magicalDefense || 0));
   }
 
-  /* ───────── Flavor/arma ───────── */
-
-  private weaponCategory(w?: WeaponData | null) {
-    return (w?.category ?? "weapon").toString().toLowerCase();
-  }
-  private isRanged(side: CombatSide): boolean {
-    const clsRanged = (side.className || "").toLowerCase() === "revenant";
-    const slug = (side.weaponMain?.slug || "").toLowerCase();
-    const cat = this.weaponCategory(side.weaponMain);
-    const rangedSlug = /bow|crossbow|rifle|gun|pistol|arquebus|flintlock|handcannon/.test(slug);
-    return clsRanged || rangedSlug || cat === "ranged";
-  }
-  private attackFlavor(side: CombatSide): DamageFlavor {
-    const c = (side.className || "").toLowerCase();
-    return c === "necromancer" || c === "exorcist" ? "magical" : "physical";
-  }
-  private elementKey(side: CombatSide, flavor: DamageFlavor): "holy" | "dark" | null {
-    if (flavor !== "magical") return null;
-    const cls = (side.className || "").toLowerCase();
-    if (cls === "exorcist") return "holy";
-    if (cls === "necromancer") return "dark";
-    return null;
-  }
-
   /* ───────── Procs (Fate + Pity) ───────── */
-
-  private passiveChance(fate: number): number {
-    return clamp(PASSIVE_BASE_CHANCE + asInt(fate) * PASSIVE_PER_FATE, 0, PASSIVE_MAX_CHANCE);
-  }
-  private ultimateChance(fate: number): number {
-    return clamp(ULT_BASE_CHANCE + asInt(fate) * ULT_PER_FATE, 0, ULT_MAX_CHANCE);
-  }
 
   private tryUltimate(attackerKey: SideKey, defenderKey: SideKey, events: CombatEvent[]): AttackOutput | null {
     const A = attackerKey === "player" ? this.player : this.enemy;
-    const runtime = A._ultimateRuntime__!;
+    const runtime = A._ultimateRuntime__ as UltimateRuntime;
     const cfg = A.ultimateSkill;
 
     if (!cfg?.enabled || !cfg.proc?.enabled) return null;
@@ -457,17 +216,14 @@ export class CombatManager {
     }
 
     const fate = asInt(A.baseStats?.fate || 0);
-    const chance = this.ultimateChance(fate);
+    const chance = ultimateChance(fate);
     const roll = roll100(this.rng);
     let forced = false;
 
     if (roll > chance) {
       runtime.failStreak++;
-      if (runtime.failStreak >= ULT_PITY_AFTER_FAILS) {
-        forced = true;
-      } else {
-        return null;
-      }
+      if (runtime.failStreak >= ULT_PITY_AFTER_FAILS) forced = true;
+      else return null;
     }
 
     runtime.cooldown = Math.max(1, ULT_COOLDOWN_TURNS);
@@ -479,14 +235,14 @@ export class CombatManager {
 
   private pushPassiveEvent(who: SideKey, side: CombatSide, fate: number, event: PassiveTriggerCheck, evts: CombatEvent[]) {
     const cfg = side.passiveDefaultSkill!;
-    const chance = this.passiveChance(fate);
+    const chance = passiveChance(fate);
     const roll = roll100(this.rng);
     let result: "activated" | "refreshed" | "failed" = "failed";
     let remaining: number | undefined;
     let forced = false;
 
     if (roll <= chance) {
-      const { runtime, refreshed } = this.applyOrRefreshPassiveRuntime(side._passiveRuntime__, cfg);
+      const { runtime, refreshed } = applyOrRefreshPassiveRuntime(side._passiveRuntime__, cfg);
       side._passiveRuntime__ = runtime;
       side._passiveFailStreak__ = 0;
       result = refreshed ? "refreshed" : "activated";
@@ -494,7 +250,7 @@ export class CombatManager {
     } else {
       side._passiveFailStreak__ = (side._passiveFailStreak__ || 0) + 1;
       if (side._passiveFailStreak__ >= PASSIVE_PITY_AFTER_FAILS) {
-        const { runtime, refreshed } = this.applyOrRefreshPassiveRuntime(side._passiveRuntime__, cfg);
+        const { runtime, refreshed } = applyOrRefreshPassiveRuntime(side._passiveRuntime__, cfg);
         side._passiveRuntime__ = runtime;
         side._passiveFailStreak__ = 0;
         result = refreshed ? "refreshed" : "activated";
@@ -519,24 +275,6 @@ export class CombatManager {
     if (DEBUG_PROC) console.debug("[PASSIVE]", side.name, cfg.name, "fate=", fate, "chance=", chance, "roll=", roll, "=>", result, forced ? "(PITY)" : "");
   }
 
-  private applyOrRefreshPassiveRuntime(current: PassiveRuntime | null | undefined, cfg: PassiveConfig) {
-    const fresh: PassiveRuntime = {
-      active: true,
-      remainingTurns: Math.max(1, asInt(cfg.durationTurns)),
-      bonusDamage: Math.max(0, asInt(cfg.bonusDamage || 0)),
-      effects: {
-        evasionFlat: asInt(cfg.extraEffects?.evasionFlat || 0),
-        magicPowerFlat: asInt(cfg.extraEffects?.magicPowerFlat || 0),
-        blockChancePercent: asInt(cfg.extraEffects?.blockChancePercent || 0),
-        criticalChancePercent: asInt(cfg.extraEffects?.criticalChancePercent || 0),
-      },
-    };
-    if (current?.active && current.remainingTurns > 0) {
-      return { runtime: { ...fresh, remainingTurns: Math.max(current.remainingTurns, fresh.remainingTurns) }, refreshed: true };
-    }
-    return { runtime: fresh, refreshed: false };
-  }
-
   /* ───────── Golpes ───────── */
 
   private performUltimateStrike(attackerKey: SideKey, defenderKey: SideKey, events: CombatEvent[], eff?: UltimateEffects): AttackOutput {
@@ -551,13 +289,13 @@ export class CombatManager {
     }
 
     // Block
-    const defHasShield = this.weaponCategory(D.weaponOff) === "shield";
+    const defHasShield = weaponCategory(D.weaponOff) === "shield";
     const blockChance = this.blockPct(D, defHasShield);
     const blocked = roll100(this.rng) <= blockChance;
     const blockReducedPercent = blocked ? BLOCK_REDUCTION_PERCENT : 0;
 
     // Sin crítico (ulti ya es masiva)
-    const flavor = this.attackFlavor(A);
+    const flavor: DamageFlavor = attackFlavor(A);
 
     // Stat base fuerte
     const baseStat = flavor === "magical" ? this.magicPower(A, true) : this.attackPower(A);
@@ -575,7 +313,7 @@ export class CombatManager {
     raw = Math.floor((raw * (100 - defDRPercent)) / 100);
 
     // Resistencia elemental
-    const elemKey = this.elementKey(A, flavor);
+    const elemKey = elementKey(A, flavor);
     const elemRes = elemKey ? pct(D.resistances?.[elemKey] || 0) : 0;
     if (elemRes > 0) raw = Math.floor((raw * (100 - elemRes)) / 100);
 
@@ -645,7 +383,7 @@ export class CombatManager {
     const A = attackerKey === "player" ? this.player : this.enemy;
     const D = defenderKey === "player" ? this.player : this.enemy;
 
-    const flavor = this.attackFlavor(A);
+    const flavor: DamageFlavor = attackFlavor(A);
 
     if (this.SE.confusionMiss(attackerKey)) {
       events.push({ type: "miss", actor: attackerKey });
@@ -660,7 +398,7 @@ export class CombatManager {
     }
 
     // Block
-    const defHasShield = this.weaponCategory(D.weaponOff) === "shield";
+    const defHasShield = weaponCategory(D.weaponOff) === "shield";
     const blockChance = this.blockPct(D, defHasShield);
     const blocked = roll100(this.rng) <= blockChance;
     const blockReducedPercent = blocked ? BLOCK_REDUCTION_PERCENT : 0;
@@ -672,8 +410,8 @@ export class CombatManager {
     if (isCrit) events.push({ type: "crit", actor: attackerKey });
 
     // Rolls de arma
-    const mainRoll = this.rollWeapon(A.weaponMain, isPrimaryWeapon(A.weaponMain, A.classMeta?.primaryWeapons));
-    const offRollPart = this.rollOffhand(A.weaponOff);
+    const mainRoll = rollMainWeapon(this.rng, A.weaponMain, isPrimaryWeapon(A.weaponMain, A.classMeta?.primaryWeapons));
+    const offRollPart = rollOffhand(this.rng, A.weaponOff);
 
     // Stat base
     const baseStat = flavor === "magical" ? this.magicPower(A, true) : this.attackPower(A);
@@ -695,7 +433,7 @@ export class CombatManager {
     dmg = Math.floor((dmg * (100 - defDRPercent)) / 100);
 
     // Resistencia elemental
-    const elemKey = this.elementKey(A, flavor);
+    const elemKey = elementKey(A, flavor);
     const elemRes = elemKey ? pct(D.resistances?.[elemKey] || 0) : 0;
     if (elemRes > 0) dmg = Math.floor((dmg * (100 - elemRes)) / 100);
 
@@ -725,7 +463,7 @@ export class CombatManager {
       flavor,
       vfx: isCrit ? "basic-crit" : "basic-hit",
       damage: {
-        final: final,
+        final,
         breakdown: {
           mainRoll,
           offRoll: offRollPart,
@@ -748,7 +486,7 @@ export class CombatManager {
 
     if (A.passiveDefaultSkill?.enabled) {
       const t = A.passiveDefaultSkill.trigger.check;
-      if ((flavor === "magical" && t === "onSpellCast") || (flavor === "physical" && t === "onBasicHit") || (this.isRanged(A) && t === "onRangedHit") || t === "onHitOrBeingHit") {
+      if ((flavor === "magical" && t === "onSpellCast") || (flavor === "physical" && t === "onBasicHit") || (isRanged(A) && t === "onRangedHit") || t === "onHitOrBeingHit") {
         this.pushPassiveEvent(attackerKey, A, fateA, t, events);
       }
     }
@@ -765,30 +503,9 @@ export class CombatManager {
     return { damage: final, flags: { miss: false, blocked, crit: isCrit } };
   }
 
-  private tickPassive(run?: PassiveRuntime | null): PassiveRuntime | null {
+  private tickPassive(run?: NonNullable<CombatSide["_passiveRuntime__"]> | null) {
     if (!run?.active) return run ?? null;
     const left = (run.remainingTurns ?? 0) - 1;
     return left <= 0 ? null : { ...run, remainingTurns: left };
-  }
-
-  /* ───────── Rolls de arma ───────── */
-
-  private rollWeapon(w?: WeaponData | null, primary: boolean = false): number {
-    if (!w) return 0;
-    const lo = Math.max(0, asInt((w as any).minDamage || 0));
-    const hi = Math.max(lo, asInt((w as any).maxDamage || 0));
-    const base = hi <= lo ? lo : lo + asInt(this.rng() * (hi - lo + 1));
-    const mult = primary ? PRIMARY_WEAPON_BONUS_MULT : 1;
-    return Math.floor(base * mult);
-  }
-  private rollOffhand(off?: WeaponData | null): number {
-    if (!off) return 0;
-    const cat = this.weaponCategory(off);
-    const lo = Math.max(0, asInt((off as any).minDamage || 0));
-    const hi = Math.max(lo, asInt((off as any).maxDamage || 0));
-    const base = hi <= lo ? lo : lo + asInt(this.rng() * (hi - lo + 1));
-    if (cat === "weapon") return Math.floor((base * OFFHAND_WEAPON_CONTRIB_PERCENT) / 100);
-    if (cat === "focus") return Math.floor((base * OFFHAND_FOCUS_CONTRIB_PERCENT) / 100);
-    return 0;
   }
 }

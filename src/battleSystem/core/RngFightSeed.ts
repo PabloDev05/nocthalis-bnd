@@ -1,4 +1,10 @@
 /* eslint-disable no-console */
+// Utilidades de RNG determinístico para simulaciones de combate.
+// Basado en Mulberry32 (https://stackoverflow.com/a/47593316).
+// Permite semillar desde string (hash FNV-1a) o número (uint32).
+// Permite derivar RNGs hijos (útil para sub-sistemas).
+// Incluye helpers comunes: entero en rango, porcentaje, chance, elección ponderada.
+
 export type Rng = () => number;
 
 /** Hash 32-bit simple (FNV-1a) para semillar desde strings. */
@@ -14,9 +20,9 @@ export function hash32(str: string): number {
 /** Mulberry32: RNG rápido, determinístico en [0,1). */
 export function mulberry32(seed: number, opts?: { debug?: boolean }): Rng {
   const debug = !!opts?.debug;
-  const s = seed >>> 0;               // fuerza a uint32
+  const s = seed >>> 0; // fuerza a uint32
   if (debug) console.log("[RNG] mulberry32 seed:", s);
-  let t = s || 1;                     // si seed=0 y no queremos secuencia 0, usar 1
+  let t = s || 1; // si seed=0 y no queremos secuencia 0, usar 1
   return function rand() {
     t += 0x6d2b79f5;
     let r = Math.imul(t ^ (t >>> 15), 1 | t);
@@ -38,7 +44,10 @@ export function rollInt(rng: Rng, min: number, max: number): number {
   return lo + Math.floor(rng() * (hi - lo + 1));
 }
 
-/** Dado un RNG, devuelve 1..100 (int). */
+/** Dado un RNG, devuelve 1..100 (int).
+ *  Nota: CombatManager usa su propio roll100 de `core/combatMath`.
+ *  Este se mantiene como utilidad general para otros módulos.
+ */
 export function roll100(rng: Rng): number {
   return 1 + Math.floor(rng() * 100);
 }

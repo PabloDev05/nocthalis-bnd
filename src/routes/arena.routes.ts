@@ -8,7 +8,7 @@ import {
 
 const arenaRoutes = Router();
 
-arenaRoutes.get("/arena/opponents", requireAuth, getArenaOpponentsController);
-arenaRoutes.post("/arena/challenges", requireAuth, postArenaChallengeController);
+arenaRoutes.get("/opponents", requireAuth, getArenaOpponentsController);
+arenaRoutes.post("/challenges", requireAuth, postArenaChallengeController);
 
 export default arenaRoutes;
