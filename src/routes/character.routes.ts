@@ -11,21 +11,21 @@ import allocatePointsController from "../controllers/allocatePoints.controller";
 const router = Router();
 
 /** Clases y selección */
-router.get("/character/classes", getCharacterClasses);
-router.post("/character/choose-class", requireAuth, chooseClass);
-router.post("/character/choose-subclass", requireAuth, chooseSubclass);
+router.get("/classes", getCharacterClasses);
+router.post("/choose-class", requireAuth, chooseClass);
+router.post("/choose-subclass", requireAuth, chooseSubclass);
 
 /** Perfil de personaje */
-router.get("/character/me", requireAuth, getMyCharacter);
-router.get("/character/progression", requireAuth, getProgression);
+router.get("/me", requireAuth, getMyCharacter);
+router.get("/progression", requireAuth, getProgression);
 
 /** Inventario / equipo */
-router.get("/character/inventory", requireAuth, getInventory);
-router.post("/character/equip", requireAuth, equipItem);
-router.post("/character/unequip", requireAuth, unequipItem);
-router.post("/character/use-item", requireAuth, useConsumable);
+router.get("/inventory", requireAuth, getInventory);
+router.post("/equip", requireAuth, equipItem);
+router.post("/unequip", requireAuth, unequipItem);
+router.post("/use-item", requireAuth, useConsumable);
 
 /** Asignación de puntos */
-router.post("/character/allocate", requireAuth, allocatePointsController);
+router.post("/allocate", requireAuth, allocatePointsController);
 
 export default router;

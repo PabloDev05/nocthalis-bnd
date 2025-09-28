@@ -7,16 +7,16 @@ import { getCombatResultsController, getCombatResultDetailController } from "../
 const combatRoutes = Router();
 
 // 🧪 Fixtures (público, sin auth)
-combatRoutes.get("/combat/simulate", simulateCombatPreviewController);
+combatRoutes.get("/simulate", simulateCombatPreviewController);
 
 // 🔍 Preview real (auth, NO persiste)
-combatRoutes.post("/combat/simulate", requireAuth, simulateCombatController);
+combatRoutes.post("/simulate", requireAuth, simulateCombatController);
 
 // ⚔️ Resolver (auth, PERSISTE)
-combatRoutes.post("/combat/resolve", requireAuth, resolveCombatController);
+combatRoutes.post("/resolve", requireAuth, resolveCombatController);
 
 // 🗂️ Historial (auth)
-combatRoutes.get("/combat/results", requireAuth, getCombatResultsController);
-combatRoutes.get("/combat/results/:id", requireAuth, getCombatResultDetailController);
+combatRoutes.get("/results", requireAuth, getCombatResultsController);
+combatRoutes.get("/results/:id", requireAuth, getCombatResultDetailController);
 
 export default combatRoutes;

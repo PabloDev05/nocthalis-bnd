@@ -1,5 +1,11 @@
 /* eslint-disable no-console */
-// src/battleSystem/pvp/pvpRunner.ts
+// Corre un combate PvP hasta que alguien llega a 0 HP (KO).
+// Usa CombatManager internamente.
+// No tiene tolerancias ni maxRounds, solo un límite de seguridad muy alto.
+// Recibe snapshots simples (copia de valores) y devuelve un resultado simple.
+// No depende de nada fuera de battleSystem (salvo config/pvp).
+// Usa RNG inyectable (por defecto Math.random, pero puede ser determinístico).
+// No debe lanzar errores, siempre devolver un resultado (draw si hay error).
 import { CombatManager } from "../core/CombatManager";
 import type { WeaponData } from "../core/Weapon";
 import { normalizeWeaponData, ensureWeaponOrDefault } from "../core/Weapon";

@@ -1,20 +1,22 @@
 // src/battleSystem/index.ts
-
 /**
- * Barrel del sistema de batalla:
- * - Core/Engine: CombatManager, StatusEngine, RNG determinístico.
- * - Snapshots: buildCharacterSnapshot (copia valores tal cual para el runner).
- * - Weapons: tipos + helpers (roll, plantillas, primary bonus).
- * - PvP Runner: runPvp (+ tipos de salida/timeline).
- * - Passives: packs y sumatoria de modificadores (para stats/combate).
- * - Constants/Fixtures/UI: utilidades compartidas.
+ * Módulo principal del sistema de combate.
+ * Exporta la API pública: CombatManager, entidades, armas, pasivas, utilidades.
+ * No exporta nada que no sea parte de la API pública (evitar fugas de abstracción).
+ * Mantiene dependencias internas (core, entidades, pasivas, utilidades).
+ * Evita dependencias externas fuera de battleSystem (salvo constantes).
+ * Usa snapshots de CharacterSnapshot para copiar estados de personajes (sin referencias).
+ * Usa RNG inyectable (por defecto Math.random, pero puede ser determinístico).
+ * Usa StatusEngine para manejar estados y resistencias (separación de responsabilidades).
+ * Evita lógica de UI, IO, red, almacenamiento, etc. (solo lógica de combate).
+ * Evita lógica específica de juego (solo lógica genérica de combate táctico).
  */
 
 // ───────────────────────────────────────────
 // Core / Engine
 // ───────────────────────────────────────────
 export { CombatManager } from "./core/CombatManager";
-export type { AttackFlags, SideKey } from "./core/CombatManager";
+export type { AttackFlags, SideKey } from "./core/CombatTypes"; // ⬅️ tipos ahora viven en combatTypes
 export { mulberry32 } from "./core/RngFightSeed";
 export { StatusEngine } from "./core/StatusEngine";
 
