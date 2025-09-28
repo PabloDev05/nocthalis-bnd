@@ -1,5 +1,3 @@
-// src/battleSystem/constants/status.ts
-
 /**
  * Definiciones base de BUFFS/DEBUFFS para combate por turnos.
  * - Solo estructura y metadata legible por UI/runner.
@@ -50,6 +48,7 @@ export interface StatusDef {
   /**
    * Stats derivados que se espera modifique mientras esté activo (sólo hints).
    * Ej.: ["attackPower", "damageReduction"]
+   * ⚠️ El Engine decide cómo aplicar estos efectos.
    */
   affects?: string[];
 }
@@ -188,6 +187,8 @@ export const STATUS_CATALOG: Record<StatusKey, StatusDef> = {
     description: "Cannot use ultimate skill.",
     tags: ["control", "magic"],
     baseDuration: 1,
+    // 👉 esto ayuda a StatusEngine.silenced() a detectarlo si consulta affects
+    affects: ["ultimateLock"],
   },
 
   // ───── Buffs ─────

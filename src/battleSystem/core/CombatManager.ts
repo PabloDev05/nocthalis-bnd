@@ -3,7 +3,7 @@
 import type { WeaponData } from "./Weapon";
 import { isPrimaryWeapon, PRIMARY_WEAPON_BONUS_MULT } from "./Weapon";
 import { StatusEngine, type Side } from "./StatusEngine";
-import { STATUS_CATALOG } from "../constants/status";
+import { STATUS_CATALOG, isStatusKey, type StatusKey } from "../constants/status";
 
 /* ────────────────────────────────────────────────────────────────────── */
 /*                             PARÁMETROS                                */
@@ -270,14 +270,16 @@ export class CombatManager {
     this.player._ultimateRuntime__ = { cooldown: 0, failStreak: 0 };
     this.enemy._ultimateRuntime__ = { cooldown: 0, failStreak: 0 };
 
-    // StatusEngine con resistencias del objetivo
+    // StatusEngine con resistencias del objetivo (type-safe)
     this.SE = new StatusEngine(
       this.rng,
       (side, key) => {
         const ref = side === "player" ? this.player : this.enemy;
-        return clamp(ref.resistances?.[key] ?? 0, 0, 100);
+        const k = isStatusKey(key) ? key : undefined;
+        const resObj = (ref.resistances ?? {}) as Record<string, number>;
+        return clamp(resObj[k ?? ""] ?? 0, 0, 100);
       },
-      (key) => STATUS_CATALOG[key]?.maxStacks
+      (key) => (isStatusKey(key) ? STATUS_CATALOG[key]?.maxStacks : undefined)
     );
   }
 
@@ -293,8 +295,8 @@ export class CombatManager {
       this.SE.wakeIfDamaged(victim);
       this.pendingStartEvents.push({
         type: "dot_tick",
-        actor: e.actor,
-        victim,
+        actor: e.actor === "player" ? "player" : "enemy",
+        victim: e.victim === "player" ? "player" : "enemy",
         key: e.key,
         damage: e.dmg,
         vfx: e.key === "bleed" ? "bleed-tick" : e.key === "poison" ? "poison-tick" : "burn-tick",
@@ -615,15 +617,17 @@ export class CombatManager {
       },
     });
 
-    // Debuffs de ulti
+    // Debuffs de ulti (type-safe con StatusKey)
     if (eff?.applyDebuff) {
-      const dur = Math.max(1, asInt(eff.debuffDurationTurns ?? STATUS_CATALOG[eff.applyDebuff]?.baseDuration ?? 1));
+      const key = eff.applyDebuff as unknown as StatusKey;
+      const baseDur = isStatusKey(key) ? STATUS_CATALOG[key]?.baseDuration ?? 1 : 1;
+      const dur = Math.max(1, asInt(eff.debuffDurationTurns ?? baseDur));
       const val = Math.max(0, asInt(eff.debuffValue ?? 0));
       const dot = eff.applyDebuff === "bleed" ? Math.max(0, asInt(eff.bleedDamagePerTurn ?? 0)) : undefined;
 
       this.SE.tryApply({
         to: defenderKey,
-        key: eff.applyDebuff,
+        key,
         duration: dur,
         stacks: 1,
         value: eff.applyDebuff === "bleed" ? undefined : val,

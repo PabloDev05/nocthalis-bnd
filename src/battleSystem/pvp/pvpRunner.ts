@@ -9,7 +9,7 @@ import { FORCE_ALL_PROCS } from "../../config/pvp";
 console.log("[BS] Loaded: pvp/pvpRunner.ts");
 
 /* ───────── Tipos del runner ───────── */
-export type TimelineEvent = "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast" | "dot_tick";
+export type TimelineEvent = "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast" | "dot_tick" | "status_applied"; // ← compat con FE
 
 export interface TimelineEntry {
   turn: number;
@@ -44,7 +44,7 @@ export interface PvpFightResult {
     events: string[];
     status?: Record<string, any>;
   }>;
-  /** ⬅️ NUEVO: estado final de HP (para UI/consistencia) */
+  /** ⬅️ estado final de HP (para UI/consistencia) */
   finalHP: {
     attacker: number;
     defender: number;
@@ -77,6 +77,7 @@ function isImpactEvent(ev: TimelineEvent) {
 /* ───────── armas y shape ───────── */
 function extractWeapons(raw: any): { main: WeaponData; off?: WeaponData | null } {
   const mainRaw = raw?.weapon ?? raw?.equipment?.weapon ?? raw?.equipment?.mainHand ?? raw?.equipment?.mainWeapon ?? null;
+
   const offRaw = raw?.offHand ?? raw?.offhand ?? raw?.equipment?.offHand ?? raw?.equipment?.offhand ?? raw?.equipment?.offWeapon ?? raw?.equipment?.shield ?? null;
 
   const main = ensureWeaponOrDefault(mainRaw);
@@ -110,7 +111,7 @@ function toCMEntity(raw: any) {
     combatNorm.damageReduction = clamp01(combatNorm.damageReduction + 0.03);
   }
 
-  // Fate garantizado entero
+  // Fate entero (baseStats o stats)
   const srcBase = raw?.baseStats ?? raw?.stats ?? {};
   const fateInt = i(srcBase.fate ?? 0, 0);
 
@@ -165,7 +166,7 @@ export function runPvp({ attackerSnapshot, defenderSnapshot, seed }: { attackerS
   const attacker = toCMEntity(attackerSnapshot);
   const defender = toCMEntity(defenderSnapshot);
 
-  // ⬅️ Arrancamos SIEMPRE a FULL HP (ignora el currentHP del snapshot)
+  // Arrancamos SIEMPRE a FULL HP (ignora el currentHP del snapshot)
   (attacker as any).currentHP = attacker.maxHP;
   (defender as any).currentHP = defender.maxHP;
 
@@ -175,7 +176,7 @@ export function runPvp({ attackerSnapshot, defenderSnapshot, seed }: { attackerS
   const log: string[] = [];
   const snapshots: PvpFightResult["snapshots"] = [];
 
-  const SAFETY_MAX_ACTIONS = 100_000; // enorme, solo por si hay bug de loop infinito
+  const SAFETY_MAX_ACTIONS = 100_000; // solo por si hay loop infinito
   let turn = 0;
   let endReason: "ko" | "safety" = "ko";
 
@@ -196,34 +197,9 @@ export function runPvp({ attackerSnapshot, defenderSnapshot, seed }: { attackerS
     const actorRole: "attacker" | "defender" = isAtkTurn ? "attacker" : "defender";
     const atkEntity = isAtkTurn ? attacker : defender;
 
-    // Marcas visuales para UI si FORCED (no altera daño)
-    if (FORCE_ALL_PROCS) {
-      (out as any).events ??= [];
-      const hasPassive = (out as any).events.some((e: any) => e?.type === "passive_proc");
-      const hasUlt = (out as any).events.some((e: any) => e?.type === "ultimate_cast");
-      if (!hasPassive) {
-        (out as any).events.push({
-          type: "passive_proc",
-          actor: actorSide,
-          name: String(atkEntity?.passiveDefaultSkill?.name ?? "Passive"),
-          chancePercent: 100,
-          roll: 1,
-          result: "activated",
-          forcedByPity: true,
-          duration: 2,
-        });
-      }
-      if (!hasUlt) {
-        (out as any).events.push({
-          type: "ultimate_cast",
-          actor: actorSide,
-          name: String(atkEntity?.ultimateSkill?.name ?? "Ultimate"),
-          chance: 100,
-          roll: 1,
-          forcedByPity: true,
-        });
-      }
-    }
+    // ⛔ IMPORTANTE: NO inyectar eventos falsos ni con FORCE_ALL_PROCS.
+    // Si el CombatManager no produjo ultimate/passive, no “dibujamos” nada.
+    // (Antes esto causaba logs sin daño).
 
     const baseTags: string[] = [];
     if (atkEntity?.weaponMain?.slug) baseTags.push(`${actorRole}:weapon:${atkEntity.weaponMain.slug}`);
@@ -289,7 +265,7 @@ export function runPvp({ attackerSnapshot, defenderSnapshot, seed }: { attackerS
           source: evRole,
           damage: 0,
           attackerHP: clampInt(cm.player.currentHP, 0, attacker.maxHP),
-          defenderHP: clampInt(cm.enemy.currentHP, 0, defender.maxHP),
+          defenderHP: clampInt(cm.enemy.currentHP, 0, defenderMaxHP(defender)),
           event: "passive_proc",
           ability: { kind: "passive", name, durationTurns: i((ev as any).duration ?? 0, 0) },
           tags: [...baseTags, `${evRole}:passive:${name}`, `${evRole}:passive:${result}`, `${evRole}:passive:chance:${chance}`, `${evRole}:passive:roll:${roll}`, ...(pity ? [`${evRole}:pity`] : [])],
@@ -359,7 +335,7 @@ export function runPvp({ attackerSnapshot, defenderSnapshot, seed }: { attackerS
       }
     }
 
-    // Snapshot
+    // Snapshot por turno
     snapshots.push({
       round: turn,
       actor: isAtkTurn ? "player" : "enemy",
@@ -371,7 +347,7 @@ export function runPvp({ attackerSnapshot, defenderSnapshot, seed }: { attackerS
     });
   }
 
-  // Resultado: SOLO por KO (o safety)
+  // Resultado: KO o safety
   const w = cm.getWinner(); // null si safety
   const outcome: "win" | "lose" | "draw" = !w ? "draw" : w === "player" ? "win" : "lose";
 
@@ -401,4 +377,9 @@ export function runPvp({ attackerSnapshot, defenderSnapshot, seed }: { attackerS
   if (!counts.ultimate_cast) console.log("[BS][runPvp] ⚠️ No hubo ultimate_cast.");
 
   return { outcome, turns, timeline, log, snapshots, finalHP };
+}
+
+/* helpers locales */
+function defenderMaxHP(defender: any) {
+  return clampInt(defender?.maxHP ?? defender?.combat?.maxHP ?? 0, 1, 10_000_000);
 }
