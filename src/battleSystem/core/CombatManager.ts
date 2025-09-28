@@ -1,71 +1,56 @@
-// src/battleSystem/core/CombatManager.ts
-
-// PvP táctico con resistencias completas + eventos diferenciados:
-// - `dot_tick` para ticks de DoT (separado de `hit` normal).
-// - DoT tiquea al INICIO del turno del afectado.
-// - Estados: chance y magnitud afectadas por resistencia del objetivo.
-// - Daño elemental para mágicos con elemento (Exorcist→holy, Necromancer→dark).
-// - Crit chance y crit bonus mitigados por resistencias del defensor.
-// - Eventos: "hit" | "crit" | "block" | "miss" | "passive_proc" | "ultimate_cast" | "dot_tick".
+// PvP táctico, cálculos ENTEROS y simples, Fate visible y con "pity system".
 
 import type { WeaponData } from "./Weapon";
 import { isPrimaryWeapon, PRIMARY_WEAPON_BONUS_MULT } from "./Weapon";
 import { StatusEngine, type Side } from "./StatusEngine";
-import { STATUS_CATALOG } from "../constants/status";
+import { STATUS_CATALOG, isStatusKey, type StatusKey } from "../constants/status";
 
-export interface ManagerOpts {
-  rng?: () => number;
-  seed?: number;
+/* ────────────────────────────────────────────────────────────────────── */
+/*                             PARÁMETROS                                */
+/* ────────────────────────────────────────────────────────────────────── */
 
-  maxRounds?: number;
+const DEBUG_PROC = false;
 
-  /** Porción de daño bloqueado (0.5 = reduce 50%) */
-  blockReduction?: number;
+/** Bloqueo reduce este porcentaje del daño (entero 0..100) */
+const BLOCK_REDUCTION_PERCENT = 50;
 
-  /** Bonus de crítico base si el atacante no trae `criticalDamageBonus` (0.6 = +60%). */
-  critMultiplierBase?: number;
-
-  /** Variación del daño base (±j sobre 1.0). 0.22 ⇒ [0.78..1.22] */
-  damageJitter?: number;
-
-  /** 🔧 Aumenta levemente TODO el daño antes de DEF (p.ej. 1.08 = +8%). */
-  globalDamageMult?: number;
-
-  /** 🔧 “Perillas” para potenciar críticos de forma controlada (antes de mitigación): */
-  critBonusAdd?: number;
-  critBonusMult?: number;
-
-  /** Variación extra SOLO para golpes críticos. 0.08 ⇒ [0.92..1.08] */
-  critJitter?: number;
-
-  /** (legacy) – ignorado; siempre 1 acción por turno. */
-  maxActionsPerBurst?: number;
-
-  /** 🔒 Piso relativo: el crítico SIEMPRE ≥ (dañoNormal * critMinFrac). Ej: 1.05 = +5% sobre el normal */
-  critMinFrac?: number;
-
-  /** 🔒 Techo relativo opcional para evitar picos: crítico ≤ (dañoNormal * critMaxFrac). Ej: 1.25 = +25% */
-  critMaxFrac?: number;
-}
-
-const DEBUG_MAN = false;
-
-// ───────── Balance (tuning) ─────────
-const OFFHAND_WEAPON_CONTRIB = 0.35;
-const OFFHAND_FOCUS_CONTRIB = 0.15;
-const SHIELD_BLOCK_BONUS = 0.05;
-const SHIELD_DR_BONUS = 0.03;
-
+/** Softcaps de defensa (valores ENTEROS) */
 const PHYS_DEF_SOFTCAP = 40;
 const MAG_DEF_SOFTCAP = 40;
 
-const PASSIVE_MAX_CHANCE = 50;
-const PASSIVE_FATE_SLOW = 0.6;
+/** Bonos de escudo (enteros %) */
+const SHIELD_BLOCK_BONUS_PERCENT = 5;
+const SHIELD_DR_BONUS_PERCENT = 3;
 
-const ULTIMATE_MAX_CHANCE = 25;
-const ULTIMATE_FATE_SLOW = 0.5;
+/** Crítico base si falta dato (enteros %) y bonus daño crit (enteros %) */
+const CRIT_DEFAULT_CHANCE_PERCENT = 5;
+const CRIT_DEFAULT_BONUS_PERCENT = 40;
 
-// ───────── Tipos pasiva/ulti ─────────
+/** Caps de procs y escalado por Fate (enteros) */
+const PASSIVE_BASE_CHANCE = 5; // %
+const PASSIVE_PER_FATE = 2; // % por punto de Fate
+const PASSIVE_MAX_CHANCE = 50; // %
+const PASSIVE_PITY_AFTER_FAILS = 6; // garantía tras N fallos seguidos
+
+const ULT_BASE_CHANCE = 2; // %
+const ULT_PER_FATE = 1; // % por punto de Fate
+const ULT_MAX_CHANCE = 25; // %
+const ULT_COOLDOWN_TURNS = 4; // CD fijo (entero ≥ 1)
+const ULT_PITY_AFTER_FAILS = 8; // garantía tras N turnos sin lanzar
+
+/** Daño base de Ultimate (enteros) */
+const ULT_DAMAGE_MAIN_MULT = 3; // multiplica el stat base
+const ULT_DAMAGE_WEAPON_PART = 1; // agrega min+max/2 aproximado arma
+const ULT_EXTRA_FLAT = 0; // flat extra (puedes ajustar)
+
+/** Contribuciones de offhand (enteros %) */
+const OFFHAND_WEAPON_CONTRIB_PERCENT = 35;
+const OFFHAND_FOCUS_CONTRIB_PERCENT = 15;
+
+/* ────────────────────────────────────────────────────────────────────── */
+/*                                TIPOS                                  */
+/* ────────────────────────────────────────────────────────────────────── */
+
 export type PassiveTriggerCheck = "onBasicHit" | "onRangedHit" | "onSpellCast" | "onHitOrBeingHit";
 export type DamageFlavor = "physical" | "magical";
 
@@ -77,10 +62,10 @@ export interface PassiveTrigger {
   maxChancePercent: number;
 }
 export interface PassiveExtraEffects {
-  evasionFlat?: number;
-  magicPowerFlat?: number;
-  blockChancePercent?: number;
-  criticalChancePercent?: number;
+  evasionFlat?: number; // % entero
+  magicPowerFlat?: number; // entero
+  blockChancePercent?: number; // % entero
+  criticalChancePercent?: number; // % entero
 }
 export interface PassiveConfig {
   enabled: boolean;
@@ -89,14 +74,14 @@ export interface PassiveConfig {
   shortDescEn?: string;
   longDescEn?: string;
   trigger: PassiveTrigger;
-  durationTurns: number;
-  bonusDamage: number;
+  durationTurns: number; // entero
+  bonusDamage: number; // entero
   extraEffects?: PassiveExtraEffects;
 }
 interface PassiveRuntime {
   active: boolean;
-  remainingTurns: number;
-  bonusDamage: number;
+  remainingTurns: number; // entero
+  bonusDamage: number; // entero
   effects: Required<PassiveExtraEffects>;
 }
 
@@ -124,75 +109,15 @@ export interface UltimateConfig {
   effects: UltimateEffects;
   proc: {
     enabled: boolean;
-    trigger: UltimateTrigger; // onTurnStart
+    trigger: UltimateTrigger;
     respectCooldown: boolean;
   };
 }
 interface UltimateRuntime {
-  cooldown: number;
+  cooldown: number; // entero ≥ 0
+  failStreak: number;
 }
 
-// ───────── Utils ─────────
-const asInt = (n: number) => Math.round(Number(n) || 0);
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, asInt(v)));
-const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-const num = (v: unknown, d = 0) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : d;
-};
-const toFrac = (pp?: number) => clamp01(asInt(pp ?? 0) / 100);
-
-function makeSeededRng(seed: number): () => number {
-  let t = seed >>> 0 || 1;
-  return () => {
-    t += 0x6d2b79f5;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
-function roll100(rng: () => number) {
-  return Math.floor(rng() * 100) + 1;
-}
-
-function normalizeEffects(e?: PassiveExtraEffects): Required<PassiveExtraEffects> {
-  return {
-    evasionFlat: asInt(e?.evasionFlat ?? 0),
-    magicPowerFlat: asInt(e?.magicPowerFlat ?? 0),
-    blockChancePercent: asInt(e?.blockChancePercent ?? 0),
-    criticalChancePercent: asInt(e?.criticalChancePercent ?? 0),
-  };
-}
-function computePassiveChance(cfg: PassiveConfig, fate: number): number {
-  const t = cfg.trigger;
-  const growth = Math.floor(asInt(fate) * t.fateScalePerPoint * PASSIVE_FATE_SLOW);
-  return clamp(t.baseChancePercent + growth, 0, PASSIVE_MAX_CHANCE);
-}
-function computeUltimateChance(cfg: UltimateConfig, fate: number): number {
-  const t = cfg.proc.trigger;
-  const growth = Math.floor(asInt(fate) * t.fateScalePerPoint * ULTIMATE_FATE_SLOW);
-  return clamp(t.baseChancePercent + growth, 0, ULTIMATE_MAX_CHANCE);
-}
-function applyOrRefreshPassiveRuntime(current: PassiveRuntime | null | undefined, cfg: PassiveConfig) {
-  const fresh: PassiveRuntime = {
-    active: true,
-    remainingTurns: Math.max(1, asInt(cfg.durationTurns)),
-    bonusDamage: Math.max(0, asInt(cfg.bonusDamage ?? 0)),
-    effects: normalizeEffects(cfg.extraEffects),
-  };
-  if (current?.active && current.remainingTurns > 0) {
-    return {
-      runtime: {
-        ...fresh,
-        remainingTurns: Math.max(current.remainingTurns, fresh.remainingTurns),
-      },
-      refreshed: true,
-    };
-  }
-  return { runtime: fresh, refreshed: false };
-}
-
-// ───────── Interfaces side ─────────
 export type SideKey = "player" | "enemy";
 
 export interface CombatSide {
@@ -202,7 +127,7 @@ export interface CombatSide {
   maxHP: number;
   currentHP: number;
 
-  baseStats?: { [k: string]: number }; // Fate
+  baseStats?: { [k: string]: number };
   stats?: Record<string, number>;
   resistances?: Record<string, number>;
   equipment?: Record<string, unknown>;
@@ -210,11 +135,11 @@ export interface CombatSide {
   combat: {
     attackPower: number;
     magicPower: number;
-    evasion: number; // 0..1
-    blockChance: number; // 0..1
-    damageReduction: number; // 0..1
-    criticalChance: number; // 0..1
-    criticalDamageBonus: number; // 0.5 => +50%
+    evasion: number; // 0..1 o %
+    blockChance: number; // 0..1 o %
+    damageReduction: number; // 0..1 o %
+    criticalChance: number; // 0..1 o %
+    criticalDamageBonus: number; // % o fracción
     maxHP?: number;
   };
 
@@ -227,15 +152,20 @@ export interface CombatSide {
   ultimateSkill?: UltimateConfig;
 
   _passiveRuntime__?: PassiveRuntime | null;
+  _passiveFailStreak__?: number;
+
   _ultimateRuntime__?: UltimateRuntime | null;
 }
 
-// ───────── Eventos ─────────
+/* ────────────────────────────────────────────────────────────────────── */
+/*                           EVENTOS Y SALIDA                             */
+/* ────────────────────────────────────────────────────────────────────── */
+
 export type CombatEvent =
   | { type: "miss"; actor: "player" | "enemy" }
   | { type: "block"; actor: "player" | "enemy" }
   | { type: "crit"; actor: "player" | "enemy" }
-  | { type: "ultimate_cast"; actor: "player" | "enemy"; name: string }
+  | { type: "ultimate_cast"; actor: "player" | "enemy"; name: string; chance: number; roll: number; forcedByPity?: boolean }
   | {
       type: "passive_proc";
       actor: "player" | "enemy";
@@ -246,9 +176,9 @@ export type CombatEvent =
       result: "activated" | "refreshed" | "failed";
       remainingTurns?: number;
       duration?: number;
+      forcedByPity?: boolean;
     }
   | {
-      /** Golpe activo (básico / pasiva / ultimate), NO DoT. */
       type: "hit";
       actor: "player" | "enemy";
       flavor: DamageFlavor;
@@ -260,29 +190,18 @@ export type CombatEvent =
           offRoll: number;
           baseStat: number;
           passiveBonus: number;
-          defenseFactor: number;
-          elementFactor?: number;
-          jitterFactor: number;
-          critMult: number;
-          /** multiplicador aplicado en el paso de bloqueo (1 - blockReduction) */
-          blockFactor: number;
-          /** cuánto DR plano quedó al final */
-          drFactor: number;
-          /** multiplicador de ulti aplicado antes de DEF */
-          ultimatePreMult?: number;
-          /** multiplicador global antes de DEF */
-          globalMult?: number;
-          /** jitter adicional en críticos */
-          critJitterFactor?: number;
-
-          /** NUEVOS: para el log */
-          preBlock?: number; // daño antes del paso de bloqueo
-          blockedAmount?: number; // cantidad ABSOLUTA bloqueada
+          defenseFactor: number; // 0..100 %
+          elementFactor?: number; // 0..100 %
+          critBonusPercent: number; // %
+          blockReducedPercent: number; // %
+          drReducedPercent: number; // %
+          preBlock?: number;
+          blockedAmount?: number;
+          ultimateDamage?: number;
         };
       };
     }
   | {
-      /** Nuevo: tick de DoT (sangrado/veneno/quemadura) */
       type: "dot_tick";
       actor: "player" | "enemy";
       victim: "player" | "enemy";
@@ -291,7 +210,25 @@ export type CombatEvent =
       vfx: "bleed-tick" | "poison-tick" | "burn-tick";
     };
 
-// ───────── Manager ─────────
+/* ────────────────────────────────────────────────────────────────────── */
+/*                           HELPERS ENTEROS                              */
+/* ────────────────────────────────────────────────────────────────────── */
+
+const asInt = (n: number) => Math.trunc(Number(n) || 0);
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, asInt(v)));
+const pct = (x: number) => clamp(x, 0, 100);
+const toPct = (v: unknown) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  if (n <= 1 && n >= 0) return clamp(n * 100, 0, 100);
+  return pct(n);
+};
+const roll100 = (rng: () => number) => Math.floor(rng() * 100) + 1;
+
+/* ────────────────────────────────────────────────────────────────────── */
+/*                         CLASE PRINCIPAL                                */
+/* ────────────────────────────────────────────────────────────────────── */
+
 export interface AttackFlags {
   miss?: boolean;
   blocked?: boolean;
@@ -301,14 +238,6 @@ export interface AttackOutput {
   damage: number;
   flags: AttackFlags;
   events?: CombatEvent[];
-  extra?: {
-    actions?: number;
-    strikes?: Array<{ damage: number; flags: AttackFlags }>;
-    passiveState?: {
-      player?: { active: boolean; remainingTurns: number } | null;
-      enemy?: { active: boolean; remainingTurns: number } | null;
-    };
-  };
 }
 
 export class CombatManager {
@@ -316,75 +245,47 @@ export class CombatManager {
   public enemy: CombatSide;
 
   private rng: () => number;
-  private opts: Required<
-    Pick<ManagerOpts, "maxRounds" | "blockReduction" | "critMultiplierBase" | "damageJitter" | "globalDamageMult" | "critBonusAdd" | "critBonusMult" | "critJitter" | "critMinFrac" | "critMaxFrac">
-  > &
-    ManagerOpts;
-
   private rounds = 0;
-  private dbgCount = 0;
 
   private SE: StatusEngine;
   private pendingStartEvents: CombatEvent[] = [];
 
-  constructor(attackerLike: any, defenderLike: any, optsOrSeed?: number | ManagerOpts) {
+  constructor(attackerLike: any, defenderLike: any, opts?: { rng?: () => number }) {
     this.player = attackerLike as CombatSide;
     this.enemy = defenderLike as CombatSide;
 
-    // ⚙️ Defaults (balance suave + críticos acotados)
-    const defaults = {
-      maxRounds: 50,
-      blockReduction: 0.5,
-      critMultiplierBase: 0.4,
-      damageJitter: 0.18,
-      globalDamageMult: 1.08,
-      critBonusAdd: 0.0,
-      critBonusMult: 0.92,
-      critJitter: 0.06,
-      critMinFrac: 1.05, // crítico mínimo +5% vs normal
-      critMaxFrac: 1.25, // crítico máximo +25% vs normal
-    } as const;
+    this.rng = opts?.rng ?? Math.random;
 
-    const provided: ManagerOpts = typeof optsOrSeed === "number" ? { seed: optsOrSeed } : optsOrSeed ?? {};
+    // Fallback armas
+    this.player.weaponMain = this.player.weaponMain || { slug: "fists", minDamage: 1, maxDamage: 3, type: "physical", category: "weapon", hands: 1 };
+    this.enemy.weaponMain = this.enemy.weaponMain || { slug: "fists", minDamage: 1, maxDamage: 3, type: "physical", category: "weapon", hands: 1 };
 
-    this.rng = provided.rng ?? (typeof provided.seed === "number" ? makeSeededRng(provided.seed) : Math.random);
-    this.opts = { ...defaults, ...provided };
-
-    // Fallback a puños
-    this.player.weaponMain = this.player.weaponMain || {
-      slug: "fists",
-      minDamage: 1,
-      maxDamage: 3,
-      type: "physical",
-      category: "weapon",
-      hands: 1,
-    };
-    this.enemy.weaponMain = this.enemy.weaponMain || {
-      slug: "fists",
-      minDamage: 1,
-      maxDamage: 3,
-      type: "physical",
-      category: "weapon",
-      hands: 1,
-    };
-
-    // Clamp HP
+    // HP clamp
     this.player.currentHP = clamp(this.player.currentHP, 0, this.player.maxHP);
     this.enemy.currentHP = clamp(this.enemy.currentHP, 0, this.enemy.maxHP);
 
-    // StatusEngine con resistencias del OBJETIVO
+    // Inicializar pity
+    this.player._passiveFailStreak__ = 0;
+    this.enemy._passiveFailStreak__ = 0;
+    this.player._ultimateRuntime__ = { cooldown: 0, failStreak: 0 };
+    this.enemy._ultimateRuntime__ = { cooldown: 0, failStreak: 0 };
+
+    // StatusEngine con resistencias del objetivo (type-safe)
     this.SE = new StatusEngine(
       this.rng,
       (side, key) => {
         const ref = side === "player" ? this.player : this.enemy;
-        return clamp(num(ref.resistances?.[key], 0), 0, 100);
+        const k = isStatusKey(key) ? key : undefined;
+        const resObj = (ref.resistances ?? {}) as Record<string, number>;
+        return clamp(resObj[k ?? ""] ?? 0, 0, 100);
       },
-      (key) => STATUS_CATALOG[key]?.maxStacks
+      (key) => (isStatusKey(key) ? STATUS_CATALOG[key]?.maxStacks : undefined)
     );
   }
 
-  // ───────── Rondas (DoT en turnStart) ─────────
-  startRound(turn: number, onStart?: (s: { turn: number; playerHP: number; enemyHP: number }) => void) {
+  /* ───────── Rondas (DoT al inicio) ───────── */
+
+  startRound(turn: number) {
     if (turn % 2 === 1) this.rounds++;
 
     const collect = (e: { actor: Side; victim: Side; key: "bleed" | "poison" | "burn"; dmg: number }) => {
@@ -394,8 +295,8 @@ export class CombatManager {
       this.SE.wakeIfDamaged(victim);
       this.pendingStartEvents.push({
         type: "dot_tick",
-        actor: e.actor,
-        victim,
+        actor: e.actor === "player" ? "player" : "enemy",
+        victim: e.victim === "player" ? "player" : "enemy",
         key: e.key,
         damage: e.dmg,
         vfx: e.key === "bleed" ? "bleed-tick" : e.key === "poison" ? "poison-tick" : "burn-tick",
@@ -405,39 +306,19 @@ export class CombatManager {
     this.SE.tickDots("enemy", "turnStart", collect);
 
     this.SE.onRoundStart(turn, () => {});
-    onStart?.({
-      turn,
-      playerHP: this.player.currentHP,
-      enemyHP: this.enemy.currentHP,
-    });
+
+    // Reducir cooldown de ultimates al final de la ronda completa:
+    if (turn % 2 === 0) {
+      if (this.player._ultimateRuntime__!.cooldown > 0) this.player._ultimateRuntime__!.cooldown--;
+      if (this.enemy._ultimateRuntime__!.cooldown > 0) this.enemy._ultimateRuntime__!.cooldown--;
+    }
   }
 
-  private endOfRoundTick() {
-    this.player._passiveRuntime__ = this.tickPassive(this.player._passiveRuntime__);
-    this.enemy._passiveRuntime__ = this.tickPassive(this.enemy._passiveRuntime__);
-    if (this.player._ultimateRuntime__?.cooldown! > 0) this.player._ultimateRuntime__!.cooldown--;
-    if (this.enemy._ultimateRuntime__?.cooldown! > 0) this.enemy._ultimateRuntime__!.cooldown--;
-  }
-  private tickPassive(run?: PassiveRuntime | null): PassiveRuntime | null {
-    if (!run?.active) return run ?? null;
-    const left = (run.remainingTurns ?? 0) - 1;
-    return left <= 0 ? null : { ...run, remainingTurns: left };
-  }
-
-  // ───────── API ─────────
-  playerAttack(): AttackOutput {
-    return this.performBurst("player", "enemy");
-  }
-  enemyAttack(): AttackOutput {
-    const out = this.performBurst("enemy", "player");
-    this.endOfRoundTick();
-    return out;
-  }
+  // ❌ NO más límite de rondas ni tolerancias: sólo acaba por HP=0
   isCombatOver(): boolean {
-    if (this.player.currentHP <= 0 || this.enemy.currentHP <= 0) return true;
-    if (this.rounds >= this.opts.maxRounds) return true;
-    return false;
+    return this.player.currentHP <= 0 || this.enemy.currentHP <= 0;
   }
+
   getWinner(): "player" | "enemy" | null {
     if (this.player.currentHP <= 0 && this.enemy.currentHP <= 0) return null;
     if (this.player.currentHP <= 0) return "enemy";
@@ -445,436 +326,469 @@ export class CombatManager {
     return null;
   }
 
-  // ───────── Helpers arma/flavor/elemento ─────────
-  private rollWeapon(w?: WeaponData | null): number {
-    if (!w) return 0;
-    const lo = Math.max(0, Math.floor((w as any).minDamage || 0));
-    const hi = Math.max(lo, Math.floor((w as any).maxDamage || 0));
-    if (hi <= lo) return lo;
-    return Math.floor(lo + this.rng() * (hi - lo + 1));
+  // (opcional) helper para que quien llama pueda leer HP actuales
+  public getHPs() {
+    return { playerHP: Math.max(0, this.player.currentHP), enemyHP: Math.max(0, this.enemy.currentHP) };
   }
+
+  /* ───────── API por turno ───────── */
+
+  playerAttack(): AttackOutput {
+    return this.performTurn("player", "enemy");
+  }
+  enemyAttack(): AttackOutput {
+    return this.performTurn("enemy", "player");
+  }
+
+  /* ───────── Núcleo de turno ───────── */
+
+  private performTurn(attackerKey: SideKey, defenderKey: SideKey): AttackOutput {
+    const events: CombatEvent[] = this.pendingStartEvents.splice(0);
+
+    if (this.isCombatOver()) return { damage: 0, flags: { miss: false }, events };
+
+    const A = attackerKey === "player" ? this.player : this.enemy;
+
+    // 1) Intentar Ultimate al inicio del turno del atacante
+    const ult = this.tryUltimate(attackerKey, defenderKey, events);
+    if (ult) {
+      if (DEBUG_PROC) console.debug("[ULT HIT]", A.name, "dmg=", ult.damage);
+      if (this.isCombatOver()) return { damage: ult.damage, flags: { miss: false }, events };
+    }
+
+    // 2) 1 golpe básico
+    const basic = this.performBasicStrike(attackerKey, defenderKey, events);
+    return { damage: basic.damage, flags: basic.flags, events };
+  }
+
+  /* ───────── Lecturas simples de stats ───────── */
+
+  private evasionPct(side: CombatSide, withPassive = true): number {
+    const base = toPct(side.combat.evasion);
+    const add = withPassive && side._passiveRuntime__?.active ? toPct(side._passiveRuntime__!.effects.evasionFlat) : 0;
+    return pct(base + add);
+  }
+  private blockPct(side: CombatSide, withShield: boolean, withPassive = true): number {
+    const base = toPct(side.combat.blockChance);
+    const addPsv = withPassive && side._passiveRuntime__?.active ? toPct(side._passiveRuntime__!.effects.blockChancePercent) : 0;
+    const addSh = withShield ? SHIELD_BLOCK_BONUS_PERCENT : 0;
+    return pct(base + addPsv + addSh);
+  }
+  private critPct(side: CombatSide, withPassive = true): number {
+    const base = toPct(side.combat.criticalChance || CRIT_DEFAULT_CHANCE_PERCENT);
+    const add = withPassive && side._passiveRuntime__?.active ? toPct(side._passiveRuntime__!.effects.criticalChancePercent) : 0;
+    return pct(base + add);
+  }
+  private critBonusPct(side: CombatSide): number {
+    const raw = side.combat.criticalDamageBonus;
+    const asPercent = toPct(raw || CRIT_DEFAULT_BONUS_PERCENT);
+    return pct(asPercent);
+  }
+  private magicPower(side: CombatSide, withPassive = true): number {
+    const base = asInt(side.combat.magicPower || 0);
+    const add = withPassive && side._passiveRuntime__?.active ? asInt(side._passiveRuntime__!.effects.magicPowerFlat || 0) : 0;
+    return Math.max(0, base + add);
+  }
+  private attackPower(side: CombatSide): number {
+    return Math.max(0, asInt(side.combat.attackPower || 0));
+  }
+  private drPct(side: CombatSide, withShield: boolean): number {
+    const base = toPct(side.combat.damageReduction || 0);
+    const sh = withShield ? SHIELD_DR_BONUS_PERCENT : 0;
+    const st = toPct(this.SE.extraDamageReduction(side === this.player ? "player" : "enemy") * 100);
+    return pct(base + sh + st);
+  }
+  private physDefEff(side: CombatSide, owner: Side): number {
+    const base = Math.max(0, asInt(side.stats?.physicalDefense || 0));
+    const mul = this.SE.physDefMul(owner);
+    const bonusPct = toPct((mul - 1) * 100);
+    return Math.max(0, base + Math.floor((base * bonusPct) / 100));
+  }
+  private magDefEff(side: CombatSide): number {
+    return Math.max(0, asInt(side.stats?.magicalDefense || 0));
+  }
+
+  /* ───────── Flavor/arma ───────── */
+
   private weaponCategory(w?: WeaponData | null) {
-    return (w?.category ?? "").toString().toLowerCase();
-  }
-  private weaponIsRanged(w?: WeaponData | null) {
-    const s = (w?.slug || "").toString().toLowerCase();
-    const c = this.weaponCategory(w);
-    return /bow|crossbow|rifle|gun|pistol|arquebus|flintlock|handcannon/.test(s) || c === "ranged";
-  }
-  private attackFlavorOf(side: CombatSide): DamageFlavor {
-    const n = (side.className || "").toLowerCase();
-    return n === "necromancer" || n === "exorcist" ? "magical" : "physical";
+    return (w?.category ?? "weapon").toString().toLowerCase();
   }
   private isRanged(side: CombatSide): boolean {
     const clsRanged = (side.className || "").toLowerCase() === "revenant";
-    return clsRanged || this.weaponIsRanged(side.weaponMain);
+    const slug = (side.weaponMain?.slug || "").toLowerCase();
+    const cat = this.weaponCategory(side.weaponMain);
+    const rangedSlug = /bow|crossbow|rifle|gun|pistol|arquebus|flintlock|handcannon/.test(slug);
+    return clsRanged || rangedSlug || cat === "ranged";
   }
-  private elementKeyForAttack(side: CombatSide, flavor: DamageFlavor): "holy" | "dark" | null {
+  private attackFlavor(side: CombatSide): DamageFlavor {
+    const c = (side.className || "").toLowerCase();
+    return c === "necromancer" || c === "exorcist" ? "magical" : "physical";
+  }
+  private elementKey(side: CombatSide, flavor: DamageFlavor): "holy" | "dark" | null {
     if (flavor !== "magical") return null;
     const cls = (side.className || "").toLowerCase();
     if (cls === "exorcist") return "holy";
     if (cls === "necromancer") return "dark";
     return null;
   }
-  private vfxForStrike(side: CombatSide, flavor: DamageFlavor, isCrit: boolean): string {
-    const cls = (side.className || "").toLowerCase();
-    if (flavor === "magical") {
-      if (cls === "exorcist") return isCrit ? "holy-smite-crit" : "holy-smite";
-      if (cls === "necromancer") return isCrit ? "shadow-curse-crit" : "shadow-curse";
-      return isCrit ? "spell-burst-crit" : "spell-burst";
-    }
-    if (this.isRanged(side)) return isCrit ? "projectile-crit" : "projectile";
-    const main = side.weaponMain?.slug?.toLowerCase() || "";
-    if (/dagger|knife|kris|fang/.test(main)) return isCrit ? "stab-crit" : "stab";
-    if (/mace|hammer|flail/.test(main)) return isCrit ? "smash-crit" : "smash";
-    return isCrit ? "slash-crit" : "slash";
+
+  /* ───────── Procs (Fate + Pity) ───────── */
+
+  private passiveChance(fate: number): number {
+    return clamp(PASSIVE_BASE_CHANCE + asInt(fate) * PASSIVE_PER_FATE, 0, PASSIVE_MAX_CHANCE);
+  }
+  private ultimateChance(fate: number): number {
+    return clamp(ULT_BASE_CHANCE + asInt(fate) * ULT_PER_FATE, 0, ULT_MAX_CHANCE);
   }
 
-  // ───────── Derivados con estados ─────────
-  private withPassiveBuffs(side: CombatSide, owner: Side) {
-    const base = {
-      evasion: clamp01(num(side.combat.evasion, 0)),
-      magicPower: Math.max(0, asInt(num(side.combat.magicPower, 0))),
-      blockChance: clamp01(num(side.combat.blockChance, 0)),
-      criticalChance: clamp01(num(side.combat.criticalChance, 0)),
-    };
-    const run = side._passiveRuntime__;
-    let out =
-      run?.active && run.remainingTurns > 0
-        ? {
-            evasion: clamp01(base.evasion + toFrac(run.effects.evasionFlat)),
-            magicPower: Math.max(0, asInt(base.magicPower + (run.effects.magicPowerFlat || 0))),
-            blockChance: clamp01(base.blockChance + toFrac(run.effects.blockChancePercent)),
-            criticalChance: clamp01(base.criticalChance + toFrac(run.effects.criticalChancePercent)),
-          }
-        : base;
-
-    return out;
-  }
-  private physDefEff(side: CombatSide, owner: Side): number {
-    const base = Math.max(0, num(side.stats?.["physicalDefense"], 0));
-    return base * this.SE.physDefMul(owner);
-  }
-  private magDefEff(side: CombatSide): number {
-    return Math.max(0, num(side.stats?.["magicalDefense"], 0));
-  }
-  private critChanceReductionEff(owner: Side, side: CombatSide): number {
-    const res = toFrac(side.resistances?.["criticalChanceReduction"]);
-    const extra = this.SE.critChanceReductionFrac(owner);
-    return clamp01(res + extra);
-  }
-  private atkPowerEff(owner: Side, side: CombatSide): number {
-    const mul = this.SE.attackPowerMul(owner);
-    const base = Math.max(0, asInt(num(side.combat.attackPower, 0)));
-    return Math.max(0, asInt(base * mul));
-  }
-  private drBonusEff(owner: Side): number {
-    return this.SE.extraDamageReduction(owner);
-  }
-  private isSilenced(owner: Side): boolean {
-    return this.SE.silenced(owner);
-  }
-
-  // ───────── Burst SIN attack speed (siempre 1 acción) ─────────
-  private performBurst(attackerKey: SideKey, defenderKey: SideKey): AttackOutput {
-    const events: CombatEvent[] = this.pendingStartEvents.splice(0);
-    if (this.isCombatOver()) return { damage: 0, flags: { miss: false }, events, extra: { actions: 0, strikes: [] } };
-
-    const strikes: Array<{ damage: number; flags: AttackFlags }> = [];
-    let totalDamage = 0;
-    let actions = 0;
-
+  private tryUltimate(attackerKey: SideKey, defenderKey: SideKey, events: CombatEvent[]): AttackOutput | null {
     const A = attackerKey === "player" ? this.player : this.enemy;
-    const ASide: Side = attackerKey;
+    const runtime = A._ultimateRuntime__!;
+    const cfg = A.ultimateSkill;
 
-    if (this.SE.cannotAct(ASide)) {
-      events.push({ type: "miss", actor: attackerKey });
-      return { damage: 0, flags: { miss: true }, events, extra: { actions: 0, strikes } };
+    if (!cfg?.enabled || !cfg.proc?.enabled) return null;
+    if (cfg.proc.respectCooldown && runtime.cooldown > 0) {
+      runtime.failStreak++;
+      return null;
+    }
+    if (this.SE.silenced(attackerKey)) {
+      runtime.failStreak++;
+      return null;
     }
 
-    // 1) Ultimate (opcional).
-    const maybeUlt = this.tryUltimateCast(attackerKey, defenderKey, events);
-    if (maybeUlt) {
-      actions++;
-      strikes.push({ damage: maybeUlt.damage, flags: maybeUlt.flags });
-      totalDamage += maybeUlt.damage;
-      if (this.isCombatOver()) return { damage: totalDamage, flags: { miss: false }, events, extra: { actions, strikes } };
+    const fate = asInt(A.baseStats?.fate || 0);
+    const chance = this.ultimateChance(fate);
+    const roll = roll100(this.rng);
+    let forced = false;
+
+    if (roll > chance) {
+      runtime.failStreak++;
+      if (runtime.failStreak >= ULT_PITY_AFTER_FAILS) {
+        forced = true;
+      } else {
+        return null;
+      }
     }
 
-    // 2) 1 golpe básico por turno.
-    const out = this.performSingleStrike(attackerKey, defenderKey, events, undefined);
-    actions++;
-    strikes.push({ damage: out.damage, flags: out.flags });
-    totalDamage += out.damage;
+    runtime.cooldown = Math.max(1, ULT_COOLDOWN_TURNS);
+    runtime.failStreak = 0;
 
-    const anyCrit = strikes.some((s) => s.flags.crit);
-    const anyBlocked = strikes.some((s) => s.flags.blocked);
-    const allMiss = strikes.length > 0 && strikes.every((s) => s.flags.miss);
+    events.push({ type: "ultimate_cast", actor: attackerKey, name: cfg.name, chance, roll, forcedByPity: forced });
+    return this.performUltimateStrike(attackerKey, defenderKey, events, cfg.effects);
+  }
 
-    return {
-      damage: totalDamage,
-      flags: { miss: allMiss, crit: anyCrit, blocked: anyBlocked },
-      events,
-      extra: {
-        actions,
-        strikes,
-        passiveState: {
-          player: this.player._passiveRuntime__ ? { active: true, remainingTurns: this.player._passiveRuntime__!.remainingTurns } : { active: false, remainingTurns: 0 },
-          enemy: this.enemy._passiveRuntime__ ? { active: true, remainingTurns: this.enemy._passiveRuntime__!.remainingTurns } : { active: false, remainingTurns: 0 },
-        },
+  private pushPassiveEvent(who: SideKey, side: CombatSide, fate: number, event: PassiveTriggerCheck, evts: CombatEvent[]) {
+    const cfg = side.passiveDefaultSkill!;
+    const chance = this.passiveChance(fate);
+    const roll = roll100(this.rng);
+    let result: "activated" | "refreshed" | "failed" = "failed";
+    let remaining: number | undefined;
+    let forced = false;
+
+    if (roll <= chance) {
+      const { runtime, refreshed } = this.applyOrRefreshPassiveRuntime(side._passiveRuntime__, cfg);
+      side._passiveRuntime__ = runtime;
+      side._passiveFailStreak__ = 0;
+      result = refreshed ? "refreshed" : "activated";
+      remaining = runtime.remainingTurns;
+    } else {
+      side._passiveFailStreak__ = (side._passiveFailStreak__ || 0) + 1;
+      if (side._passiveFailStreak__ >= PASSIVE_PITY_AFTER_FAILS) {
+        const { runtime, refreshed } = this.applyOrRefreshPassiveRuntime(side._passiveRuntime__, cfg);
+        side._passiveRuntime__ = runtime;
+        side._passiveFailStreak__ = 0;
+        result = refreshed ? "refreshed" : "activated";
+        remaining = runtime.remainingTurns;
+        forced = true;
+      }
+    }
+
+    evts.push({
+      type: "passive_proc",
+      actor: who,
+      name: cfg.name,
+      trigger: cfg.trigger.check,
+      chancePercent: chance,
+      roll,
+      result,
+      remainingTurns: remaining,
+      duration: cfg.durationTurns,
+      forcedByPity: forced,
+    });
+
+    if (DEBUG_PROC) console.debug("[PASSIVE]", side.name, cfg.name, "fate=", fate, "chance=", chance, "roll=", roll, "=>", result, forced ? "(PITY)" : "");
+  }
+
+  private applyOrRefreshPassiveRuntime(current: PassiveRuntime | null | undefined, cfg: PassiveConfig) {
+    const fresh: PassiveRuntime = {
+      active: true,
+      remainingTurns: Math.max(1, asInt(cfg.durationTurns)),
+      bonusDamage: Math.max(0, asInt(cfg.bonusDamage || 0)),
+      effects: {
+        evasionFlat: asInt(cfg.extraEffects?.evasionFlat || 0),
+        magicPowerFlat: asInt(cfg.extraEffects?.magicPowerFlat || 0),
+        blockChancePercent: asInt(cfg.extraEffects?.blockChancePercent || 0),
+        criticalChancePercent: asInt(cfg.extraEffects?.criticalChancePercent || 0),
       },
     };
+    if (current?.active && current.remainingTurns > 0) {
+      return { runtime: { ...fresh, remainingTurns: Math.max(current.remainingTurns, fresh.remainingTurns) }, refreshed: true };
+    }
+    return { runtime: fresh, refreshed: false };
   }
 
-  private tryUltimateCast(attackerKey: SideKey, defenderKey: SideKey, events: CombatEvent[]): AttackOutput | null {
-    const A = attackerKey === "player" ? this.player : this.enemy;
-    const ASide: Side = attackerKey;
-    const cfg = A.ultimateSkill;
-    if (!cfg?.enabled || !cfg.proc?.enabled) return null;
+  /* ───────── Golpes ───────── */
 
-    if (cfg.proc.respectCooldown) {
-      if (!A._ultimateRuntime__) A._ultimateRuntime__ = { cooldown: 0 };
-      if (A._ultimateRuntime__.cooldown > 0) return null;
-    }
-    if (this.isSilenced(ASide)) return null;
-
-    const fate = asInt(num(A.baseStats?.["fate"], 0));
-    const chance = computeUltimateChance(cfg, fate);
-    const roll = roll100(this.rng);
-    if (roll > chance) return null;
-
-    if (!A._ultimateRuntime__) A._ultimateRuntime__ = { cooldown: 0 };
-    A._ultimateRuntime__.cooldown = Math.max(1, asInt(cfg.cooldownTurns));
-    events.push({ type: "ultimate_cast", actor: attackerKey, name: cfg.name });
-
-    const mult = 1 + Math.max(0, num(cfg.effects?.bonusDamagePercent, 0)) / 100;
-    return this.performSingleStrike(attackerKey, defenderKey, events, {
-      ultimatePreMult: mult,
-      ultimateEffects: cfg.effects,
-    });
-  }
-
-  // Golpe atómico
-  private performSingleStrike(
-    attackerKey: SideKey,
-    defenderKey: SideKey,
-    events: CombatEvent[],
-    opts?: {
-      ultimatePreMult?: number;
-      ultimateEffects?: {
-        applyDebuff?: "weaken" | "fear" | "silence" | "curse" | "bleed";
-        debuffValue?: number;
-        debuffDurationTurns?: number;
-        bleedDamagePerTurn?: number;
-      };
-    }
-  ): AttackOutput {
+  private performUltimateStrike(attackerKey: SideKey, defenderKey: SideKey, events: CombatEvent[], eff?: UltimateEffects): AttackOutput {
     const A = attackerKey === "player" ? this.player : this.enemy;
     const D = defenderKey === "player" ? this.player : this.enemy;
-    const ASide: Side = attackerKey;
-    const DSide: Side = defenderKey;
 
-    const flavor: DamageFlavor = this.attackFlavorOf(A);
-    const fateA = asInt(num(A.baseStats?.["fate"], 0));
-    const fateD = asInt(num(D.baseStats?.["fate"], 0));
-
-    const Aeff = this.withPassiveBuffs(A, ASide);
-    const Deff = this.withPassiveBuffs(D, DSide);
-
-    if (this.SE.confusionMiss(ASide)) {
+    // Evasión
+    const ev = this.evasionPct(D);
+    if (roll100(this.rng) <= ev) {
       events.push({ type: "miss", actor: attackerKey });
       return { damage: 0, flags: { miss: true } };
     }
 
-    // 1) Evasión
-    const ev = clamp01(Deff.evasion);
-    if (this.rng() < ev) {
+    // Block
+    const defHasShield = this.weaponCategory(D.weaponOff) === "shield";
+    const blockChance = this.blockPct(D, defHasShield);
+    const blocked = roll100(this.rng) <= blockChance;
+    const blockReducedPercent = blocked ? BLOCK_REDUCTION_PERCENT : 0;
+
+    // Sin crítico (ulti ya es masiva)
+    const flavor = this.attackFlavor(A);
+
+    // Stat base fuerte
+    const baseStat = flavor === "magical" ? this.magicPower(A, true) : this.attackPower(A);
+    const w = A.weaponMain;
+    const weaponAvg = w ? Math.floor((asInt((w as any).minDamage || 0) + asInt((w as any).maxDamage || 0)) / 2) : 1;
+
+    // Daño crudo de ulti
+    let raw = baseStat * ULT_DAMAGE_MAIN_MULT + weaponAvg * ULT_DAMAGE_WEAPON_PART + ULT_EXTRA_FLAT;
+
+    // Defensa
+    const physDef = this.physDefEff(D, defenderKey);
+    const magDef = this.magDefEff(D);
+    const def = flavor === "magical" ? magDef : physDef;
+    const defDRPercent = def > 0 ? Math.floor((def * 100) / (def + (flavor === "magical" ? MAG_DEF_SOFTCAP : PHYS_DEF_SOFTCAP))) : 0;
+    raw = Math.floor((raw * (100 - defDRPercent)) / 100);
+
+    // Resistencia elemental
+    const elemKey = this.elementKey(A, flavor);
+    const elemRes = elemKey ? pct(D.resistances?.[elemKey] || 0) : 0;
+    if (elemRes > 0) raw = Math.floor((raw * (100 - elemRes)) / 100);
+
+    // Block
+    const preBlock = raw;
+    if (blockReducedPercent > 0) raw = Math.floor((raw * (100 - blockReducedPercent)) / 100);
+    const blockedAmount = Math.max(0, preBlock - raw);
+
+    // DR plana + escudo + estados
+    const dr = this.drPct(D, defHasShield);
+    raw = Math.floor((raw * (100 - dr)) / 100);
+
+    const final = Math.max(0, asInt(raw));
+
+    D.currentHP = Math.max(0, D.currentHP - final);
+    if (final > 0) this.SE.wakeIfDamaged(defenderKey);
+
+    events.push({
+      type: "hit",
+      actor: attackerKey,
+      flavor,
+      vfx: "ultimate-hit",
+      damage: {
+        final,
+        breakdown: {
+          mainRoll: 0,
+          offRoll: 0,
+          baseStat,
+          passiveBonus: 0,
+          defenseFactor: 100 - defDRPercent,
+          elementFactor: elemKey ? 100 - elemRes : undefined,
+          critBonusPercent: 0,
+          blockReducedPercent,
+          drReducedPercent: dr,
+          preBlock,
+          blockedAmount,
+          ultimateDamage: baseStat * ULT_DAMAGE_MAIN_MULT,
+        },
+      },
+    });
+
+    // Debuffs de ulti (type-safe con StatusKey)
+    if (eff?.applyDebuff) {
+      const key = eff.applyDebuff as unknown as StatusKey;
+      const baseDur = isStatusKey(key) ? STATUS_CATALOG[key]?.baseDuration ?? 1 : 1;
+      const dur = Math.max(1, asInt(eff.debuffDurationTurns ?? baseDur));
+      const val = Math.max(0, asInt(eff.debuffValue ?? 0));
+      const dot = eff.applyDebuff === "bleed" ? Math.max(0, asInt(eff.bleedDamagePerTurn ?? 0)) : undefined;
+
+      this.SE.tryApply({
+        to: defenderKey,
+        key,
+        duration: dur,
+        stacks: 1,
+        value: eff.applyDebuff === "bleed" ? undefined : val,
+        dotDamage: dot,
+        baseChance: 100,
+        source: attackerKey,
+        pushEvent: () => {},
+      });
+    }
+
+    return { damage: final, flags: { miss: false, blocked, crit: false } };
+  }
+
+  private performBasicStrike(attackerKey: SideKey, defenderKey: SideKey, events: CombatEvent[]): AttackOutput {
+    const A = attackerKey === "player" ? this.player : this.enemy;
+    const D = defenderKey === "player" ? this.player : this.enemy;
+
+    const flavor = this.attackFlavor(A);
+
+    if (this.SE.confusionMiss(attackerKey)) {
+      events.push({ type: "miss", actor: attackerKey });
+      return { damage: 0, flags: { miss: true } };
+    }
+
+    // Evasión
+    const ev = this.evasionPct(D);
+    if (roll100(this.rng) <= ev) {
       events.push({ type: "miss", actor: defenderKey });
       return { damage: 0, flags: { miss: true } };
     }
 
-    // 2) Block
-    const defHasShield = (D.weaponOff?.category ?? "weapon").toLowerCase() === "shield";
-    const blockChance = clamp01(Deff.blockChance + (defHasShield ? SHIELD_BLOCK_BONUS : 0));
-    const blocked = this.rng() < blockChance;
+    // Block
+    const defHasShield = this.weaponCategory(D.weaponOff) === "shield";
+    const blockChance = this.blockPct(D, defHasShield);
+    const blocked = roll100(this.rng) <= blockChance;
+    const blockReducedPercent = blocked ? BLOCK_REDUCTION_PERCENT : 0;
     if (blocked) events.push({ type: "block", actor: defenderKey });
 
-    // 3) Crítico (mitigado por fear + resistencia del DEFENSOR)
-    const critChanceBase = clamp01(Aeff.criticalChance || num(A.combat.criticalChance, 0.05));
-    const critChanceRed = this.critChanceReductionEff(DSide, D);
-    const critChanceEff = clamp01(critChanceBase - critChanceRed);
-    const isCrit = this.rng() < critChanceEff;
+    // Crítico
+    const critChance = this.critPct(A);
+    const isCrit = roll100(this.rng) <= critChance;
     if (isCrit) events.push({ type: "crit", actor: attackerKey });
 
-    // 4) Arma principal
-    let mainRoll = this.rollWeapon(A.weaponMain);
-    if (isPrimaryWeapon(A.weaponMain, A.classMeta?.primaryWeapons)) mainRoll = Math.floor(mainRoll * PRIMARY_WEAPON_BONUS_MULT);
+    // Rolls de arma
+    const mainRoll = this.rollWeapon(A.weaponMain, isPrimaryWeapon(A.weaponMain, A.classMeta?.primaryWeapons));
+    const offRollPart = this.rollOffhand(A.weaponOff);
 
-    // 5) Offhand
-    let offRollPart = 0;
-    if (A.weaponOff) {
-      const cat = (A.weaponOff.category ?? "weapon").toLowerCase();
-      const r = this.rollWeapon(A.weaponOff);
-      if (cat === "weapon") offRollPart = Math.floor(r * OFFHAND_WEAPON_CONTRIB);
-      else if (cat === "focus") offRollPart = Math.floor(r * OFFHAND_FOCUS_CONTRIB);
-    }
+    // Stat base
+    const baseStat = flavor === "magical" ? this.magicPower(A, true) : this.attackPower(A);
 
-    // 6) Stat base
-    const baseStat = flavor === "magical" ? Math.max(0, asInt(Aeff.magicPower)) : this.atkPowerEff(ASide, A);
-
-    // 7) Bonus de pasiva
+    // Bonus pasiva (si activa y coincide flavor)
     let passiveBonus = 0;
     if (A._passiveRuntime__?.active && A._passiveRuntime__?.remainingTurns > 0) {
       if (A.passiveDefaultSkill?.damageType === flavor) passiveBonus = Math.max(0, asInt(A._passiveRuntime__?.bonusDamage || 0));
     }
 
-    // 8) Base
-    let baseSum = mainRoll + offRollPart + baseStat + passiveBonus;
+    // Suma base
+    let dmg = mainRoll + offRollPart + baseStat + passiveBonus;
 
-    // 8.1) Ulti pre-mult
-    const ultimatePreMult = Math.max(1, num(opts?.ultimatePreMult, 1));
-    baseSum = Math.floor(baseSum * ultimatePreMult);
-
-    // 8.2) Global
-    const globalMult = Math.max(0.5, num(this.opts.globalDamageMult, 1));
-    baseSum = Math.floor(baseSum * globalMult);
-
-    // 9) DEF (softcap)
-    const physDef = this.physDefEff(D, DSide);
+    // Defensa
+    const physDef = this.physDefEff(D, defenderKey);
     const magDef = this.magDefEff(D);
-    const defDR = flavor === "magical" ? (magDef > 0 ? magDef / (magDef + MAG_DEF_SOFTCAP) : 0) : physDef > 0 ? physDef / (physDef + PHYS_DEF_SOFTCAP) : 0;
-    const defenseFactor = clamp01(1 - defDR);
-    let after = Math.floor(baseSum * defenseFactor);
+    const def = flavor === "magical" ? magDef : physDef;
+    const defDRPercent = def > 0 ? Math.floor((def * 100) / (def + (flavor === "magical" ? MAG_DEF_SOFTCAP : PHYS_DEF_SOFTCAP))) : 0;
+    dmg = Math.floor((dmg * (100 - defDRPercent)) / 100);
 
-    // 9.5) Elemental
-    let elementFactor = 1;
-    const elemKey = this.elementKeyForAttack(A, flavor);
-    if (elemKey) {
-      const resElem = clamp(num(D.resistances?.[elemKey], 0), 0, 100);
-      elementFactor = Math.max(0, 1 - resElem / 100);
-      after = Math.floor(after * elementFactor);
-    }
+    // Resistencia elemental
+    const elemKey = this.elementKey(A, flavor);
+    const elemRes = elemKey ? pct(D.resistances?.[elemKey] || 0) : 0;
+    if (elemRes > 0) dmg = Math.floor((dmg * (100 - elemRes)) / 100);
 
-    // 10) Jitter normal
-    const j = clamp01(num(this.opts.damageJitter, 0.18));
-    const jitterFactor = 1 - j + this.rng() * (2 * j);
-    after = Math.floor(after * jitterFactor);
-
-    // === Snapshot del daño SIN crítico para acotar el crítico ===
-    const preCritBase = after;
-
-    // 11) Crítico
-    let critMult = 1;
-    let critJitterFactor: number | undefined = undefined;
+    // Crítico
+    let critBonusPercent = 0;
     if (isCrit) {
-      const raw = num(A.combat.criticalDamageBonus, this.opts.critMultiplierBase);
-      const baseBonus = raw > 1 ? toFrac(raw) : raw;
-      const tunedBonus = Math.max(0, baseBonus * num(this.opts.critBonusMult, 0.92) + num(this.opts.critBonusAdd, 0.0));
-      const critDmgRed = toFrac(D.resistances?.["criticalDamageReduction"]);
-      const effBonus = Math.max(0, tunedBonus - critDmgRed);
-      critMult = 1 + effBonus;
-
-      after = Math.floor(after * critMult);
-
-      const cj = clamp01(num(this.opts.critJitter, 0.06));
-      critJitterFactor = 1 - cj + this.rng() * (2 * cj);
-      after = Math.floor(after * critJitterFactor);
-
-      // 🔒 Asegurar: CRIT ≥ normal * critMinFrac  (y opcional techo)
-      const minFrac = Math.max(1, num(this.opts.critMinFrac, 1.05));
-      const maxFrac = Math.max(minFrac, num(this.opts.critMaxFrac, 1.25));
-      const floorVal = Math.floor(preCritBase * minFrac);
-      const ceilVal = Math.floor(preCritBase * maxFrac);
-      if (after < floorVal) after = floorVal;
-      if (after > ceilVal) after = ceilVal;
+      critBonusPercent = this.critBonusPct(A);
+      dmg = Math.floor((dmg * (100 + critBonusPercent)) / 100);
     }
 
-    // 12) Block (guardamos preBlock y blockedAmount)
-    let blockFactor = 1;
-    const preBlock = after;
-    if (blocked) {
-      blockFactor = 1 - this.opts.blockReduction;
-      after = Math.floor(after * blockFactor);
-    }
-    const blockedAmount = Math.max(0, preBlock - after);
+    // Block
+    const preBlock = dmg;
+    if (blockReducedPercent > 0) dmg = Math.floor((dmg * (100 - blockReducedPercent)) / 100);
+    const blockedAmount = Math.max(0, preBlock - dmg);
 
-    // 13) DR plano + escudo + estados
-    const drBase = clamp01(num(D.combat.damageReduction, 0));
-    const drFromShield = defHasShield ? SHIELD_DR_BONUS : 0;
-    const drFromStatuses = clamp01(this.drBonusEff(DSide));
-    const dr = clamp01(drBase + drFromShield + drFromStatuses);
-    const drFactor = 1 - dr;
-    after = Math.floor(after * drFactor);
+    // DR plana + escudo + estados
+    const dr = this.drPct(D, defHasShield);
+    dmg = Math.floor((dmg * (100 - dr)) / 100);
 
-    // 14) Aplicar
-    const finalDmg = Math.max(0, asInt(after));
-    D.currentHP = Math.max(0, D.currentHP - finalDmg);
-    if (finalDmg > 0) this.SE.wakeIfDamaged(DSide);
+    const final = Math.max(0, asInt(dmg));
+    D.currentHP = Math.max(0, D.currentHP - final);
+    if (final > 0) this.SE.wakeIfDamaged(defenderKey);
 
-    // 15) Evento
     events.push({
       type: "hit",
       actor: attackerKey,
       flavor,
-      vfx: this.vfxForStrike(A, flavor, isCrit),
+      vfx: isCrit ? "basic-crit" : "basic-hit",
       damage: {
-        final: finalDmg,
+        final: final,
         breakdown: {
           mainRoll,
           offRoll: offRollPart,
           baseStat,
           passiveBonus,
-          defenseFactor: Number(defenseFactor.toFixed(3)),
-          elementFactor: Number(elementFactor.toFixed(3)),
-          jitterFactor: Number(jitterFactor.toFixed(3)),
-          critMult: Number(critMult.toFixed(2)),
-          blockFactor: Number(blockFactor.toFixed(2)),
-          drFactor: Number(drFactor.toFixed(2)),
-          ultimatePreMult: Number(ultimatePreMult.toFixed(2)),
-          globalMult: Number(globalMult.toFixed(2)),
-          ...(critJitterFactor != null ? { critJitterFactor: Number(critJitterFactor.toFixed(3)) } : {}),
+          defenseFactor: 100 - defDRPercent,
+          elementFactor: elemKey ? 100 - elemRes : undefined,
+          critBonusPercent,
+          blockReducedPercent,
+          drReducedPercent: dr,
           preBlock,
           blockedAmount,
         },
       },
     });
 
-    // 16) Pasivas post-hit
-    const pushPassiveEvent = (who: SideKey, side: CombatSide, fate: number, event: PassiveTriggerCheck) => {
-      const cfg = side.passiveDefaultSkill!;
-      const chance = computePassiveChance(cfg, fate);
-      const roll = roll100(this.rng);
-      let result: "activated" | "refreshed" | "failed" = "failed";
-      let remaining: number | undefined;
-      if (roll <= chance) {
-        const { runtime, refreshed } = applyOrRefreshPassiveRuntime(side._passiveRuntime__, cfg);
-        side._passiveRuntime__ = runtime;
-        result = refreshed ? "refreshed" : "activated";
-        remaining = runtime.remainingTurns;
-      }
-      events.push({
-        type: "passive_proc",
-        actor: who,
-        name: cfg.name,
-        trigger: cfg.trigger.check,
-        chancePercent: chance,
-        roll,
-        result,
-        remainingTurns: remaining,
-        duration: cfg.durationTurns,
-      });
-    };
+    // Intentos de pasiva
+    const fateA = asInt(A.baseStats?.fate || 0);
+    const fateD = asInt(D.baseStats?.fate || 0);
+
     if (A.passiveDefaultSkill?.enabled) {
-      const trig = A.passiveDefaultSkill.trigger.check;
-      if (flavor === "magical" && trig === "onSpellCast") pushPassiveEvent(attackerKey, A, fateA, "onSpellCast");
-      if (flavor === "physical" && trig === "onBasicHit") pushPassiveEvent(attackerKey, A, fateA, "onBasicHit");
-      if (this.isRanged(A) && trig === "onRangedHit") pushPassiveEvent(attackerKey, A, fateA, "onRangedHit");
-      if (trig === "onHitOrBeingHit") pushPassiveEvent(attackerKey, A, fateA, "onHitOrBeingHit");
+      const t = A.passiveDefaultSkill.trigger.check;
+      if ((flavor === "magical" && t === "onSpellCast") || (flavor === "physical" && t === "onBasicHit") || (this.isRanged(A) && t === "onRangedHit") || t === "onHitOrBeingHit") {
+        this.pushPassiveEvent(attackerKey, A, fateA, t, events);
+      }
     }
     if (D.passiveDefaultSkill?.enabled && D.passiveDefaultSkill.trigger.check === "onHitOrBeingHit") {
-      pushPassiveEvent(defenderKey, D, fateD, "onHitOrBeingHit");
+      this.pushPassiveEvent(defenderKey, D, fateD, "onHitOrBeingHit", events);
     }
 
-    // 17) Debuffs de la Ultimate
-    if (opts?.ultimateEffects?.applyDebuff) {
-      const eff = opts.ultimateEffects;
-      const dur = Math.max(1, asInt(eff.debuffDurationTurns ?? STATUS_CATALOG[eff.applyDebuff!]?.baseDuration ?? 1));
-      const val = Math.max(0, asInt(eff.debuffValue ?? 0));
-      const apply = (key: UltimateDebuff, more?: { dot?: number }) => {
-        this.SE.tryApply({
-          to: DSide,
-          key,
-          duration: dur,
-          stacks: 1,
-          value: key === "bleed" ? undefined : val,
-          dotDamage: key === "bleed" ? Math.max(0, asInt(more?.dot ?? eff.bleedDamagePerTurn ?? 0)) : undefined,
-          baseChance: 100,
-          source: attackerKey,
-          pushEvent: () => {},
-        });
-      };
-      switch (eff.applyDebuff) {
-        case "weaken":
-          apply("weaken");
-          break;
-        case "fear":
-          apply("fear");
-          break;
-        case "silence":
-          apply("silence");
-          break;
-        case "curse":
-          apply("curse");
-          break;
-        case "bleed":
-          apply("bleed", { dot: eff.bleedDamagePerTurn });
-          break;
-      }
+    // Tick pasivas al final de la ronda par
+    if (attackerKey === "enemy") {
+      this.player._passiveRuntime__ = this.tickPassive(this.player._passiveRuntime__);
+      this.enemy._passiveRuntime__ = this.tickPassive(this.enemy._passiveRuntime__);
     }
 
-    if (DEBUG_MAN && this.dbgCount++ < 2) {
-      /* console.log("[MAN] dmg=", finalDmg); */
-    }
-    return { damage: finalDmg, flags: { miss: false, blocked, crit: isCrit } };
+    return { damage: final, flags: { miss: false, blocked, crit: isCrit } };
+  }
+
+  private tickPassive(run?: PassiveRuntime | null): PassiveRuntime | null {
+    if (!run?.active) return run ?? null;
+    const left = (run.remainingTurns ?? 0) - 1;
+    return left <= 0 ? null : { ...run, remainingTurns: left };
+  }
+
+  /* ───────── Rolls de arma ───────── */
+
+  private rollWeapon(w?: WeaponData | null, primary: boolean = false): number {
+    if (!w) return 0;
+    const lo = Math.max(0, asInt((w as any).minDamage || 0));
+    const hi = Math.max(lo, asInt((w as any).maxDamage || 0));
+    const base = hi <= lo ? lo : lo + asInt(this.rng() * (hi - lo + 1));
+    const mult = primary ? PRIMARY_WEAPON_BONUS_MULT : 1;
+    return Math.floor(base * mult);
+  }
+  private rollOffhand(off?: WeaponData | null): number {
+    if (!off) return 0;
+    const cat = this.weaponCategory(off);
+    const lo = Math.max(0, asInt((off as any).minDamage || 0));
+    const hi = Math.max(lo, asInt((off as any).maxDamage || 0));
+    const base = hi <= lo ? lo : lo + asInt(this.rng() * (hi - lo + 1));
+    if (cat === "weapon") return Math.floor((base * OFFHAND_WEAPON_CONTRIB_PERCENT) / 100);
+    if (cat === "focus") return Math.floor((base * OFFHAND_FOCUS_CONTRIB_PERCENT) / 100);
+    return 0;
   }
 }

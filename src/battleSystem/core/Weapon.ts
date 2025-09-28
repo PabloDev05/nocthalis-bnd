@@ -4,12 +4,12 @@ export type WeaponCategory = "weapon" | "shield" | "focus";
 export type WeaponDamageType = "physical" | "magic";
 
 export interface WeaponData {
-  slug: string;            // ej: "rapier", "cursed_crossbow"
-  minDamage: number;       // daño mínimo del ítem (entero)
-  maxDamage: number;       // daño máximo del ítem (entero)
-  type: WeaponDamageType;  // tipo de daño base
+  slug: string; // ej: "rapier", "cursed_crossbow"
+  minDamage: number; // daño mínimo del ítem (entero)
+  maxDamage: number; // daño máximo del ítem (entero)
+  type: WeaponDamageType; // tipo de daño base
   category?: WeaponCategory; // por defecto "weapon"
-  hands?: 1 | 2;           // opcional
+  hands?: 1 | 2; // opcional
 }
 
 /** Bonus multiplicativo si el arma es primaria de la clase */
@@ -40,6 +40,13 @@ const slugify = (s: any) =>
 const asWeaponType = (v: any): WeaponDamageType => {
   const s = String(v ?? "").toLowerCase();
   return s === "magic" || s === "magical" ? "magic" : "physical";
+};
+
+const coerceCategory = (v: any): WeaponCategory => {
+  const s = String(v ?? "").toLowerCase();
+  if (s === "shield") return "shield";
+  if (s === "focus") return "focus";
+  return "weapon";
 };
 
 /** Mapa de alias → clave base (agrupa nombres “de fantasía” a un arquetipo) */
@@ -178,8 +185,9 @@ export function normalizeWeaponData(input: any): WeaponData {
   // Si es string, usar plantilla
   if (typeof input === "string") return weaponTemplateFor(input);
 
-  // Si trae min/max, respetar y normalizar
   const slug = slugify(input.slug ?? input.code ?? input.name ?? "unknown");
+
+  // Si trae min/max, respetar y normalizar
   const min = Number.isFinite(Number(input.minDamage ?? input.min)) ? Math.max(0, Math.floor(Number(input.minDamage ?? input.min))) : undefined;
   const max = Number.isFinite(Number(input.maxDamage ?? input.max)) ? Math.max(0, Math.floor(Number(input.maxDamage ?? input.max))) : undefined;
 
@@ -191,7 +199,7 @@ export function normalizeWeaponData(input: any): WeaponData {
       minDamage: base.minDamage,
       maxDamage: base.maxDamage,
       type: asWeaponType(input.type ?? input.damageType ?? base.type),
-      category: String(input.category ?? input.kind ?? base.category ?? "weapon").toLowerCase() as WeaponCategory,
+      category: coerceCategory(input.category ?? input.kind ?? base.category ?? "weapon"),
       hands: input.hands === 2 ? 2 : base.hands ?? 1,
     };
   }
@@ -200,13 +208,16 @@ export function normalizeWeaponData(input: any): WeaponData {
   const fixedMin = min!;
   const fixedMax = Math.max(min!, max!);
 
+  // 🛠 Mejora: si no pasan hands, usamos el de la plantilla, no forzamos 1
+  const baseTpl = weaponTemplateFor(slug);
+
   return {
     slug: slug || "unknown",
     minDamage: fixedMin,
     maxDamage: fixedMax,
     type: asWeaponType(input.type ?? input.damageType ?? "physical"),
-    category: String(input.category ?? input.kind ?? "weapon").toLowerCase() as WeaponCategory,
-    hands: input.hands === 2 ? 2 : 1,
+    category: coerceCategory(input.category ?? input.kind ?? baseTpl.category ?? "weapon"),
+    hands: input.hands === 2 ? 2 : typeof input.hands === "number" ? 1 : baseTpl.hands ?? 1,
   };
 }
 
