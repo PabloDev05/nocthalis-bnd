@@ -120,7 +120,7 @@ export const register = async (req: Request, res: Response) => {
       chest: null,
       gloves: null,
       boots: null,
-      mainWeapon: (clazz as any).defaultWeapon ?? null,
+      mainWeapon: null,
       offWeapon: null,
       ring: null,
       belt: null,
