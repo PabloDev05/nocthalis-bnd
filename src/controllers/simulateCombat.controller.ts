@@ -1,5 +1,5 @@
-// Simulación y resolución de combates PvP (nuevo sistema)
 // src/controllers/simulateCombat.controller.ts
+// Simulación y resolución de combates PvP (nuevo sistema)
 
 import type { RequestHandler } from "express";
 import { Types } from "mongoose";
@@ -100,40 +100,63 @@ async function applyRewardsToCharacter(charId: any | undefined, userId: any | un
   return { updated: true, characterId: (doc as any)._id };
 }
 
-/* Normalización timeline (mapea dot_tick→dot e infiere blockedAmount) */
-function normalizeTimeline(items: any[]) {
+/* ───────────────── normalizeTimeline (compat DB + block details + overkill) ───────────────── */
+/**
+ * - damage: siempre número (evita ValidationError del schema)
+ * - damageObj.final/damageNumber: helpers para el front
+ * - block:*: preBlock, blockedAmount, finalAfterBlock, drReducedPercent, finalAfterDR (y en breakdown)
+ * - overkill: daño que excede la vida previa del objetivo (usa HP iniciales del match para el 1er evento)
+ */
+function normalizeTimeline(items: any[], initHP?: { attackerStart?: number; defenderStart?: number }) {
   const arr = Array.isArray(items) ? items : [];
+  const toNum = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : undefined);
+
+  // HP previos al evento (se actualizan tras cada item)
+  let prevAttHP = Number.isFinite(initHP?.attackerStart) ? Math.max(0, Number(initHP!.attackerStart)) : undefined;
+  let prevDefHP = Number.isFinite(initHP?.defenderStart) ? Math.max(0, Number(initHP!.defenderStart)) : undefined;
+
   return arr.map((it, idx) => {
     const source = (it.source ?? it.actor ?? "attacker") as "attacker" | "defender";
-    const turn = Number.isFinite(Number(it.turn)) ? Math.floor(it.turn) : idx + 1;
+    const turn = Number.isFinite(Number(it.turn)) ? Math.trunc(it.turn) : idx + 1;
 
-    const attackerHP = Math.max(0, Number(it.attackerHP ?? it.playerHP ?? 0));
-    const defenderHP = Math.max(0, Number(it.defenderHP ?? it.enemyHP ?? 0));
+    // HP reportados luego del evento (post)
+    const attackerHP_post = Math.max(0, Number(it.attackerHP ?? it.playerHP ?? 0));
+    const defenderHP_post = Math.max(0, Number(it.defenderHP ?? it.enemyHP ?? 0));
 
-    const ev = (it.event as TimelineEvent) || "hit";
+    const evRaw = (it.event as TimelineEvent | string) || "hit";
+    const isNonImpact = evRaw === "passive_proc" || evRaw === "ultimate_cast" || evRaw === "dot_tick";
 
-    // Final y raw
-    const finalDamage = Number.isFinite(Number(it.damage?.final)) ? Number(it.damage.final) : Number.isFinite(Number(it.damage)) ? Number(it.damage) : 0;
-    const rawDamage = Number(it.rawDamage ?? it.damage?.raw ?? it.damageRaw ?? it.intendedDamage ?? it.baseDamage ?? it.preMitigation ?? 0);
+    // daño final/crudo
+    const dmgObj = it.damage && typeof it.damage === "object" ? it.damage : undefined;
+    const bdSrc = (dmgObj?.breakdown ?? it.breakdown) || {};
+    const finalDamage = toNum(dmgObj?.final) ?? toNum(it.damage) ?? 0;
+    const rawDamage = toNum(it.rawDamage) ?? toNum(dmgObj?.raw) ?? toNum(it.damageRaw) ?? toNum(it.intendedDamage) ?? toNum(it.baseDamage) ?? toNum(it.preMitigation);
 
-    const blockedExplicit = it.breakdown?.blockedAmount ?? it.blockedAmount ?? (typeof it.tags === "object" && !Array.isArray(it.tags) ? (it.tags as any).blockedAmount : undefined);
+    // HP del objetivo antes del evento (clave para overkill)
+    const targetPrevHP_guess = source === "attacker" ? prevDefHP : prevAttHP;
+    // si no tenemos prev aún (primer item), NO usar “post” (que sesga),
+    // mejor asumir que el inicio fue la vida máxima (debe venir en initHP)
+    const targetPrevHP = Number.isFinite(targetPrevHP_guess as number) ? (targetPrevHP_guess as number) : undefined;
 
-    const blockedAmount = Number.isFinite(Number(blockedExplicit))
-      ? Math.max(0, Math.round(Number(blockedExplicit)))
-      : rawDamage > finalDamage
-      ? Math.max(0, Math.round(rawDamage - finalDamage))
-      : undefined;
+    const computeOverkill = () => {
+      if (!Number.isFinite(finalDamage)) return 0;
+      if (!Number.isFinite(targetPrevHP)) return 0; // sin HP previo fiable, no inventamos
+      return Math.max(0, Math.round((finalDamage as number) - Math.max(0, targetPrevHP as number)));
+    };
 
-    // Eventos “no impacto”
-    if (ev === "passive_proc" || ev === "ultimate_cast" || ev === "dot_tick") {
-      const uiEvent: any = ev === "dot_tick" ? "dot" : ev;
-      return {
+    /* ── eventos no-impacto (dot/ultimate_cast/passive_proc) ── */
+    if (isNonImpact) {
+      const uiEvent = evRaw === "dot_tick" ? "dot" : (evRaw as "passive_proc" | "ultimate_cast" | "dot");
+
+      const out = {
         turn,
         source,
         event: uiEvent,
-        damage: Math.max(0, finalDamage),
-        attackerHP,
-        defenderHP,
+        damage: Math.max(0, finalDamage ?? 0), // (DB: número)
+        damageObj: { final: Math.max(0, finalDamage ?? 0) }, // (UI helper)
+        attackerHP: attackerHP_post,
+        defenderHP: defenderHP_post,
+        overkill: uiEvent === "dot" ? computeOverkill() : 0,
         ability: it.ability
           ? {
               kind: it.ability.kind === "ultimate" ? "ultimate" : "passive",
@@ -144,29 +167,92 @@ function normalizeTimeline(items: any[]) {
           : undefined,
         tags: Array.isArray(it.tags) || typeof it.tags === "object" ? it.tags : [],
       };
+
+      // actualizar prev
+      prevAttHP = attackerHP_post;
+      prevDefHP = defenderHP_post;
+      return out;
     }
 
-    // Impacto
-    const event: "hit" | "crit" | "block" | "miss" = (["hit", "crit", "block", "miss"].includes(ev as any) ? ev : null) || (finalDamage > 0 ? "hit" : "miss");
+    /* ── impactos ── */
+    let event: "hit" | "crit" | "block" | "miss";
+    if (evRaw === "hit" || evRaw === "crit" || evRaw === "block" || evRaw === "miss") {
+      event = evRaw as any;
+    } else {
+      event = (finalDamage ?? 0) > 0 ? "hit" : "miss";
+    }
+
+    const blockedExplicit = toNum(it.blockedAmount) ?? toNum(bdSrc.blockedAmount) ?? (typeof it.tags === "object" && !Array.isArray(it.tags) ? toNum((it.tags as any).blockedAmount) : undefined);
 
     const base: any = {
       turn,
       source,
       event,
-      damage: Math.max(0, finalDamage),
-      attackerHP,
-      defenderHP,
+      damage: Math.max(0, finalDamage ?? 0), // (DB)
+      damageObj: { final: Math.max(0, finalDamage ?? 0) }, // (UI)
+      damageNumber: Math.max(0, finalDamage ?? 0), // compat
+      attackerHP: attackerHP_post,
+      defenderHP: defenderHP_post,
+      rawDamage: toNum(rawDamage),
       tags: Array.isArray(it.tags) || typeof it.tags === "object" ? it.tags : [],
+      overkill: event === "miss" ? 0 : computeOverkill(),
     };
 
-    if (Number.isFinite(rawDamage)) base.rawDamage = Math.max(0, Math.round(rawDamage));
-    if (Number.isFinite(blockedAmount)) {
-      base.breakdown = { ...(it.breakdown || {}), blockedAmount: blockedAmount as number };
-      if (base.tags && typeof base.tags === "object" && !Array.isArray(base.tags)) {
-        (base.tags as any).blockedAmount = blockedAmount;
+    if (event === "hit" || event === "crit") {
+      const bdOut: any = { ...bdSrc };
+      if (toNum(bdOut.blockedAmount) == null && toNum(blockedExplicit) != null) {
+        bdOut.blockedAmount = Math.max(0, Math.round(blockedExplicit as number));
       }
+      base.breakdown = bdOut;
+
+      prevAttHP = attackerHP_post;
+      prevDefHP = defenderHP_post;
+      return base;
     }
 
+    if (event === "block") {
+      const preBlock = toNum(it.preBlock) ?? toNum(bdSrc.preBlock) ?? toNum(rawDamage);
+      const blockReducedPercent = toNum(it.blockReducedPercent) ?? toNum(bdSrc.blockReducedPercent);
+
+      const blockedAmount =
+        toNum(blockedExplicit) ??
+        (preBlock != null && blockReducedPercent != null
+          ? Math.max(0, Math.round(((preBlock as number) * (blockReducedPercent as number)) / 100))
+          : rawDamage != null && finalDamage != null
+          ? Math.max(0, Math.round((rawDamage as number) - (finalDamage as number)))
+          : undefined);
+
+      const finalAfterBlock =
+        toNum(it.finalAfterBlock) ?? toNum(bdSrc.finalAfterBlock) ?? (preBlock != null && blockedAmount != null ? Math.max(0, (preBlock as number) - (blockedAmount as number)) : undefined);
+
+      const drReducedPercent = toNum(it.drReducedPercent) ?? toNum(bdSrc.drReducedPercent);
+      const finalAfterDR = toNum(it.finalAfterDR) ?? toNum(bdSrc.finalAfterDR) ?? toNum(finalDamage);
+
+      base.blockedAmount = blockedAmount;
+      base.preBlock = preBlock;
+      base.blockReducedPercent = blockReducedPercent;
+      base.finalAfterBlock = finalAfterBlock;
+      base.drReducedPercent = drReducedPercent;
+      base.finalAfterDR = finalAfterDR;
+
+      base.breakdown = {
+        ...(it.breakdown || {}),
+        preBlock,
+        blockedAmount,
+        blockReducedPercent,
+        finalAfterBlock,
+        drReducedPercent,
+        finalAfterDR,
+      };
+
+      prevAttHP = attackerHP_post;
+      prevDefHP = defenderHP_post;
+      return base;
+    }
+
+    // MISS
+    prevAttHP = attackerHP_post;
+    prevDefHP = defenderHP_post;
     return base;
   });
 }
@@ -195,7 +281,11 @@ export const simulateCombatPreviewController: RequestHandler = async (req, res) 
     } as any);
     console.timeEnd(`[PVP][GET preview] runPvp ${safeId(matchId)}`);
 
-    const timelineNorm = normalizeTimeline(timeline);
+    // Pasar HP iniciales (máximos) para que el overkill del 1er evento sea correcto
+    const timelineNorm = normalizeTimeline(timeline, {
+      attackerStart: Number(finalHP?.attackerMax ?? 0),
+      defenderStart: Number(finalHP?.defenderMax ?? 0),
+    });
 
     console.log(`[PVP][GET preview] OK outcome=${outcome} turns=${turns} seed=${(match as any).seed}`);
     return res.json({
@@ -238,7 +328,10 @@ export const simulateCombatController: RequestHandler = async (req, res) => {
     } as any);
     console.timeEnd(`[PVP][POST simulate] runPvp ${safeId(matchId)}`);
 
-    const timelineNorm = normalizeTimeline(timeline);
+    const timelineNorm = normalizeTimeline(timeline, {
+      attackerStart: Number(finalHP?.attackerMax ?? 0),
+      defenderStart: Number(finalHP?.defenderMax ?? 0),
+    });
 
     console.log(`[PVP][POST simulate] OK outcome=${outcome} turns=${turns}`);
     return res.json({
@@ -317,7 +410,10 @@ export const resolveCombatController: RequestHandler = async (req, res) => {
     } as any);
     console.timeEnd(`[PVP][resolve] runPvp ${safeId(matchId)}`);
 
-    const timelineNorm = normalizeTimeline(timeline);
+    const timelineNorm = normalizeTimeline(timeline, {
+      attackerStart: Number(finalHP?.attackerMax ?? 0),
+      defenderStart: Number(finalHP?.defenderMax ?? 0),
+    });
     const rw = computePvpRewards(outcome);
 
     console.log(`[PVP][resolve] outcome=${outcome} turns=${turns} seed=${mAny.seed} final=${finalHP.attacker}/${finalHP.defender}`);

@@ -8,7 +8,10 @@ import {
 
 const arenaRoutes = Router();
 
+// Lista de oponentes PvP
 arenaRoutes.get("/opponents", requireAuth, getArenaOpponentsController);
+
+// Crear desafío PvP
 arenaRoutes.post("/challenges", requireAuth, postArenaChallengeController);
 
 export default arenaRoutes;

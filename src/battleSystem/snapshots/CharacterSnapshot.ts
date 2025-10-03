@@ -1,4 +1,3 @@
-// src/battleSystem/snapshots/characterSnapshot.ts
 // Construye un snapshot autocontenido para guardar en Match.
 // ❗ Copiamos valores "tal cual" (no convertimos %→fracción aquí).
 // El CombatManager/runner hacen las conversiones y aplican jitters/bonos.
@@ -84,6 +83,7 @@ export type CharacterSnapshot = {
     } | null;
   };
 
+  // Rango visible para UI (arma + contribuciones off-hand según clase)
   uiDamageMin?: number;
   uiDamageMax?: number;
 };
@@ -129,16 +129,14 @@ function normPassiveCheck(s: any): "onBasicHit" | "onRangedHit" | "onSpellCast" 
 function normalizePassive(obj: any | null | undefined) {
   if (!obj) return null;
 
-  // 👇 forzamos el union literal, no "string"
   const damageType: "physical" | "magical" = String(obj.damageType ?? "").toLowerCase() === "magical" ? "magical" : "physical";
 
-  // opcional: tipamos extraEffects como Record<string, number> | undefined
   const extra: Record<string, number> | undefined = obj.extraEffects ? Object.fromEntries(Object.entries(obj.extraEffects).map(([k, v]) => [k, Number(v) || 0])) : undefined;
 
   return {
     enabled: obj.enabled !== false,
     name: String(obj.name ?? "Passive"),
-    damageType, // ✅ ahora es "physical" | "magical"
+    damageType,
     shortDescEn: obj.shortDescEn ? String(obj.shortDescEn) : undefined,
     longDescEn: obj.longDescEn ? String(obj.longDescEn) : undefined,
     trigger: {
@@ -150,7 +148,7 @@ function normalizePassive(obj: any | null | undefined) {
     },
     durationTurns: Math.max(1, Math.trunc(Number(obj.durationTurns ?? obj.duration ?? 2))),
     bonusDamage: Math.max(0, Math.trunc(Number(obj.bonusDamage ?? 0))),
-    extraEffects: extra, // ✅ mantiene el tipo esperado
+    extraEffects: extra,
   };
 }
 
@@ -229,7 +227,7 @@ function normalizeStatsConstitution(stats: Record<string, any>): Record<string, 
   return out;
 }
 
-/* ───── Cálculo canónico de rango visible (pre-defensa) ───── */
+/* ───── Cálculo de rango visible (ajustado a la UI de la ficha) ───── */
 const OFFHAND_WEAPON_CONTRIB_PERCENT = 35;
 const OFFHAND_FOCUS_CONTRIB_PERCENT = 15;
 
@@ -253,30 +251,46 @@ function isMagicalClass(clsName: string) {
   const c = (clsName || "").toLowerCase();
   return c === "necromancer" || c === "exorcist";
 }
+
+/**
+ * Rango que muestra la UI de ficha:
+ * - No suma Attack/AttackPower.
+ * - Para clases mágicas: aplica bonus por arma primaria sobre el arma principal
+ *   y la off-hand empuja SOLO el máximo (no el mínimo).
+ * - Para clases no-mágicas: rango base del arma.
+ */
 function computeUiDamageRange(opts: { className: string; combat: CharacterSnapshot["combat"]; main: WeaponData; off: WeaponData | null; classPrimary?: string[] }): { min: number; max: number } {
-  const { className, combat, main, off, classPrimary } = opts;
-  const baseStat = isMagicalClass(className) ? asInt(combat.magicPower) : asInt(combat.attackPower);
+  const { className, main, off, classPrimary } = opts;
 
-  const primary = isPrimaryWeapon(main, classPrimary);
-  const mult = primary ? PRIMARY_WEAPON_BONUS_MULT : 1;
-  const loMain = Math.floor(Math.max(0, asInt((main as any).minDamage || 0)) * mult);
-  const hiMain = Math.floor(Math.max(loMain, asInt((main as any).maxDamage || 0)) * mult);
+  const baseLo = Math.max(0, asInt((main as any).minDamage || 0));
+  const baseHi = Math.max(baseLo, asInt((main as any).maxDamage || 0));
 
-  let loOff = 0,
-    hiOff = 0;
-  if (off) {
-    const loB = Math.max(0, asInt((off as any).minDamage || 0));
-    const hiB = Math.max(loB, asInt((off as any).maxDamage || 0));
-    if (cat(off) === "weapon") {
-      loOff = Math.floor((loB * OFFHAND_WEAPON_CONTRIB_PERCENT) / 100);
-      hiOff = Math.floor((hiB * OFFHAND_WEAPON_CONTRIB_PERCENT) / 100);
-    } else if (cat(off) === "focus") {
-      loOff = Math.floor((loB * OFFHAND_FOCUS_CONTRIB_PERCENT) / 100);
-      hiOff = Math.floor((hiB * OFFHAND_FOCUS_CONTRIB_PERCENT) / 100);
+  const magical = isMagicalClass(className);
+
+  // Arrancamos con base del arma
+  let lo = baseLo;
+  let hi = baseHi;
+
+  // Clases mágicas: bonus por primaria y off-hand sólo al máximo (UI de ficha)
+  if (magical) {
+    const primary = isPrimaryWeapon(main, classPrimary);
+    const mult = primary ? PRIMARY_WEAPON_BONUS_MULT : 1;
+
+    lo = Math.floor(lo * mult);
+    hi = Math.floor(hi * mult);
+
+    if (off) {
+      const offLo = Math.max(0, asInt((off as any).minDamage || 0));
+      const offHi = Math.max(offLo, asInt((off as any).maxDamage || 0));
+      const pct = cat(off) === "focus" ? OFFHAND_FOCUS_CONTRIB_PERCENT : cat(off) === "weapon" ? OFFHAND_WEAPON_CONTRIB_PERCENT : 0;
+
+      // Solo empuja el máximo (como lo ves en la ficha)
+      hi += Math.floor((offHi * pct) / 100);
     }
   }
 
-  return { min: baseStat + loMain + loOff, max: baseStat + hiMain + hiOff };
+  // No-mágicas → rango base (sin off-hand), que es lo que la ficha está mostrando.
+  return { min: lo, max: hi };
 }
 
 /* ───────── builder ───────── */
@@ -303,12 +317,14 @@ export function buildCharacterSnapshot(character: any): CharacterSnapshot {
 
   const srcCombat = character?.combatStats ?? character?.combat ?? {};
   const combat = {
-    attackPower: toNum(srcCombat.attackPower, 0),
-    magicPower: toNum(srcCombat.magicPower, 0),
+    // 👇 robusto: acepta attackPower o attack
+    attackPower: toNum(srcCombat.attackPower ?? (srcCombat as any).attack, 0),
+    // idem para magic
+    magicPower: toNum(srcCombat.magicPower ?? (srcCombat as any).magicAttack ?? (srcCombat as any).spellPower, 0),
     evasion: toNum(srcCombat.evasion, 0),
-    blockChance: toNum(srcCombat.blockChance, 0),
-    damageReduction: toNum(srcCombat.damageReduction, 0),
-    criticalChance: toNum(srcCombat.criticalChance, 0),
+    blockChance: toNum(srcCombat.blockChance ?? (srcCombat as any).block, 0),
+    damageReduction: toNum(srcCombat.damageReduction ?? (srcCombat as any).dr, 0),
+    criticalChance: toNum(srcCombat.criticalChance ?? (srcCombat as any).critChance ?? (srcCombat as any).crit, 0),
     criticalDamageBonus: toNum(srcCombat.criticalDamageBonus, 50),
     maxHP: toNum(srcCombat.maxHP ?? character?.maxHP, 100),
   };
@@ -366,3 +382,11 @@ export function buildCharacterSnapshot(character: any): CharacterSnapshot {
 
   return snap;
 }
+
+// Controladores que deben LEER el snapshot (no recalcular)
+// src/controllers/arena.controller.ts
+// En /arena/challenges ya estás construyendo snapshots. Asegurate de que buildSideMeta use el snapshot (no el doc crudo) para armar:
+// En /arena/opponents (listado) si no querés construir snapshot por performance, al menos usa:
+// src/controllers/characters.controller.ts (o getMyCharacter)
+// src/controllers/simulateCombat.controller.ts
+// Debe consumir match.attackerSnapshot / defenderSnapshot. Si el snapshot ya trae stats con equipo, la simulación será coherente con lo mostrado.
